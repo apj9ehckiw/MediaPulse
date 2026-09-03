@@ -112,6 +112,10 @@ export interface FFmpegStatus {
   error?: string
   goos: string
   goarch: string
+  /** 安装包下载进度：已下载字节；-1 = 无进度信息 */
+  progressDone?: number
+  /** 安装包下载进度：总字节；-1 = 未知 */
+  progressTotal?: number
 }
 
 export interface DiscoveredVideo {

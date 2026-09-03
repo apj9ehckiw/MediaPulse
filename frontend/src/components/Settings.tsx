@@ -223,11 +223,12 @@ export default function Settings({ onSaved }: Props) {
               {ff?.state === 'ready' ? '重新检测' : ff?.state === 'missing' ? '下载并安装' : '检测 / 安装'}
             </button>
           </div>
+          {ff?.state === 'installing' && <FFProgress ff={ff} />}
           {ff?.state === 'missing' && (
             <div className="ff-banner" role="alert">
               <b>未检测到 ffmpeg</b>
               <span>视频下载完成后需 ffmpeg 封装为 MP4。点击右侧「下载并安装」（约 80–130 MB，
-                下载进度见「概览」页实时日志），或自行安装到 PATH 后点「重新检测」。</span>
+                下载进度实时显示），或自行安装到 PATH 后点「重新检测」。</span>
             </div>
           )}
           <div className="form-row">
@@ -298,4 +299,39 @@ export default function Settings({ onSaved }: Props) {
       </div>
     </div>
   )
+}
+
+/** ffmpeg 安装包下载进度条（installing 状态时显示） */
+function FFProgress({ ff }: { ff: FFmpegStatus }) {
+  const done = ff.progressDone ?? -1
+  const total = ff.progressTotal ?? -1
+  const known = done >= 0 && total > 0
+  const pct = known ? Math.min(Math.round((done / total) * 100), 100) : 0
+  return (
+    <div className="ff-progress" role="status" aria-live="polite">
+      <div className="ff-progress-text">
+        下载安装中…
+        {done >= 0 && (
+          <span className="ff-progress-detail">
+            {known
+              ? `${fmtMB(done)} / ${fmtMB(total)}（${pct}%）`
+              : `${fmtMB(done)}（大小未知）`}
+          </span>
+        )}
+      </div>
+      {known ? (
+        <div className="progressbar" style={{ height: 8 }}>
+          <div className="fill" style={{ width: `${Math.max(pct, 3)}%` }} />
+        </div>
+      ) : (
+        <div className="progressbar indeterminate" style={{ height: 8 }}>
+          <div className="fill" style={{ width: '34%' }} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function fmtMB(bytes: number): string {
+  return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${(bytes / 1024).toFixed(0)} KB`
 }

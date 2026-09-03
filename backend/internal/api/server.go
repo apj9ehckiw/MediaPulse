@@ -378,12 +378,14 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true})
 }
 
-// handleFFmpegStatus ffmpeg 检测/安装状态。
+// handleFFmpegStatus ffmpeg 检测/安装状态（含安装包下载进度）。
 func (s *Server) handleFFmpegStatus(w http.ResponseWriter, r *http.Request) {
 	st, errMsg := ffmpeg.Status()
+	done, total := ffmpeg.Progress()
 	writeJSON(w, map[string]any{
 		"state": st, "path": ffmpeg.Path(), "error": errMsg,
 		"goos": runtime.GOOS, "goarch": runtime.GOARCH,
+		"progressDone": done, "progressTotal": total, // -1 = 无进度信息
 	})
 }
 

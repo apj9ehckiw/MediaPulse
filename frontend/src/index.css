@@ -832,6 +832,30 @@ select.input { cursor: pointer; }
 }
 .ff-banner b { font-weight: 650; }
 
+/* ffmpeg 安装包下载进度条 */
+.ff-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px 14px;
+  border: 1px solid #fde68a;
+  border-radius: var(--r-md);
+  background: var(--warn-bg);
+}
+.ff-progress-text {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warn);
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+.ff-progress-detail {
+  font-weight: 550;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
 /* 设置页 hint 内的 code 样式 */
 .hint code {
   font-family: var(--font-mono);

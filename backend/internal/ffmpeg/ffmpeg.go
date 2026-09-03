@@ -44,6 +44,10 @@ var (
 	githubProxy string
 	// onProgress 安装包下载进度回调（可选）
 	onProgress ProgressFn
+
+	// 下载进度快照（供 /api/ffmpeg 状态查询，前端进度条用）
+	progressDone  int64 // 已下载字节；-1 = 无进度信息
+	progressTotal int64 // 总字节；-1 = 未知
 )
 
 // SetGitHubProxy 设置 GitHub 加速代理前缀（带不带尾部 / 均可）。
@@ -58,10 +62,19 @@ func SetGitHubProxy(p string) {
 }
 
 // SetProgressFn 注册安装包下载进度回调（nil = 清除）。
+// 注册的回调同时会更新包内进度快照（Progress() 可读）。
 func SetProgressFn(fn ProgressFn) {
 	mu.Lock()
 	defer mu.Unlock()
 	onProgress = fn
+	progressDone, progressTotal = -1, -1
+}
+
+// Progress 返回下载进度快照（done/total 字节；done=-1 表示当前无下载进度）。
+func Progress() (done, total int64) {
+	mu.Lock()
+	defer mu.Unlock()
+	return progressDone, progressTotal
 }
 
 // Path 返回已解析的 ffmpeg 路径；未就绪返回空串（调用方回退到 PATH 查找）。
@@ -256,12 +269,19 @@ func download(url string, progress ProgressFn) ([]byte, error) {
 }
 
 // readBodyWithProgress 读取响应体，按约 2MB 间隔回调进度（total<0 = 响应无 Content-Length）。
+// 回调同时更新包内进度快照。
 func readBodyWithProgress(resp *http.Response, progress ProgressFn) ([]byte, error) {
 	defer resp.Body.Close()
 	total := resp.ContentLength
-	if progress != nil {
-		progress(0, total)
+	report := func(done int64) {
+		mu.Lock()
+		progressDone, progressTotal = done, total
+		mu.Unlock()
+		if progress != nil {
+			progress(done, total)
+		}
 	}
+	report(0)
 	var buf bytes.Buffer
 	if total > 0 {
 		buf.Grow(int(total))
@@ -275,14 +295,12 @@ func readBodyWithProgress(resp *http.Response, progress ProgressFn) ([]byte, err
 			buf.Write(chunk[:n])
 			read += int64(n)
 			n512k++
-			if progress != nil && (n512k%4 == 0 || err == io.EOF) {
-				progress(read, total)
+			if n512k%4 == 0 || err == io.EOF {
+				report(read)
 			}
 		}
 		if err == io.EOF {
-			if progress != nil {
-				progress(read, total)
-			}
+			report(read)
 			return buf.Bytes(), nil
 		}
 		if err != nil {
