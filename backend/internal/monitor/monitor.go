@@ -14,10 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"haijiao-web/backend/internal/config"
-	"haijiao-web/backend/internal/downloader"
-	"haijiao-web/backend/internal/history"
-	"haijiao-web/backend/internal/site"
+	"github.com/apj9ehckiw/mediapulse/backend/internal/config"
+	"github.com/apj9ehckiw/mediapulse/backend/internal/downloader"
+	"github.com/apj9ehckiw/mediapulse/backend/internal/history"
+	"github.com/apj9ehckiw/mediapulse/backend/internal/site"
 )
 
 // Status 任务状态。

@@ -1,4 +1,4 @@
-// Package site 实现 haijiao 站点 API 客户端。
+// Package site 实现目标站点 API 客户端（接口约定见 config.json 的 apiBase）。
 // 解析逻辑对应浏览器版 source/index.html：
 //   - 响应体为三重 base64：外层两次 b64 得到一重 b64 字符串，
 //     最后一重解出 UTF-8 JSON（bareDecode）

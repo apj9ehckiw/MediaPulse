@@ -1,6 +1,6 @@
-# haijiao-web
+# MediaPulse
 
-监控 haijiao 作者（`/homepage/<uid>`）的新视频，Web 界面管理。**默认不自动下载**：检查到的新视频进入「发现」页，按发布时间筛选后手动选择下载；也可在设置中开启自动下载（可限定发布时间下限）。
+监控站点作者（`/homepage/<uid>`）的新视频，Web 界面管理。**默认不自动下载**：检查到的新视频进入「发现」页，按发布时间筛选后手动选择下载；也可在设置中开启自动下载（可限定发布时间下限）。
 
 技术栈：**Go 后端**（单二进制，前端 embed 内嵌）+ **React 18 + Vite + TS** 前端 + **Docker**。
 
@@ -29,7 +29,7 @@
 ## 目录
 
 ```
-haijiao-web/
+mediapulse/
 ├─ backend/
 │  ├─ cmd/server/main.go        # 入口（环境变量配置；启动时自动检测/安装 ffmpeg）
 │  ├─ internal/site/            # 站点 API + 三重 base64 解密 + m3u8 解析
@@ -54,8 +54,8 @@ haijiao-web/
 cd frontend && npm install && npm run build
 
 # 构建并启动后端（二进制已内嵌前端）
-cd .. && go build -o server.exe ./backend/cmd/server
-HJ_ADDR=":8080" ./server.exe
+cd .. && go build -o mediapulse.exe ./backend/cmd/server
+MP_ADDR=":8080" ./mediapulse.exe
 ```
 
 打开 http://127.0.0.1:8080 ，首次使用会引导设置访问密码。
@@ -74,17 +74,17 @@ docker compose up -d --build
 
 打开 http://127.0.0.1:8080 。视频与状态持久化在宿主机 `./data`。
 
-**自定义端口**：把 `.env.example` 复制为 `.env`，修改 `HJ_PORT`（例如 `HJ_PORT=9090`）后 `docker compose up -d`，即通过 http://127.0.0.1:9090 访问；也可以临时指定 `HJ_PORT=9090 docker compose up -d --build`。容器内部固定监听 8080，仅需调整对外端口时无需改动容器配置。
+**自定义端口**：把 `.env.example` 复制为 `.env`，修改 `MP_PORT`（例如 `MP_PORT=9090`）后 `docker compose up -d`，即通过 http://127.0.0.1:9090 访问；也可以临时指定 `MP_PORT=9090 docker compose up -d --build`。容器内部固定监听 8080，仅需调整对外端口时无需改动容器配置。
 
 ## 环境变量（仅启动种子，运行时以网页端「设置」为准）
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `HJ_ADDR` | `:8080` | 监听地址 |
-| `HJ_DATA_DIR` | `.` | 数据目录：config.json / state.json / downloads.json / sessions.json / videos/ / bin/ |
-| `HJ_INTERVAL` | `600` | 首次启动默认轮询间隔秒 |
-| `HJ_API_BASE` | 站点默认 | 首次启动默认站点基址 |
-| `HJ_PASSWORD` | 空 | 首次启动种子访问密码（配置里已有密码时不覆盖；不设置则首次打开网页走设置向导） |
+| `MP_ADDR`（兼容旧 `HJ_ADDR`） | `:8080` | 监听地址 |
+| `MP_DATA_DIR`（兼容旧 `HJ_DATA_DIR`） | `.` | 数据目录：config.json / state.json / downloads.json / sessions.json / videos/ / bin/ |
+| `MP_INTERVAL`（兼容旧 `HJ_INTERVAL`） | `600` | 首次启动默认轮询间隔秒 |
+| `MP_API_BASE`（兼容旧 `HJ_API_BASE`） | 站点默认 | 首次启动默认站点基址 |
+| `MP_PASSWORD`（兼容旧 `HJ_PASSWORD`） | 空 | 首次启动种子访问密码（配置里已有密码时不覆盖；不设置则首次打开网页走设置向导） |
 
 网页端设置（持久化 config.json）：作者管理（添加/启停/删除）、站点基址、轮询间隔、列表类型、段下载并发、自动下载（含发布时间下限）、访问密码。
 

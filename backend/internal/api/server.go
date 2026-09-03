@@ -19,11 +19,11 @@ import (
 	"sync"
 	"time"
 
-	"haijiao-web/backend/internal/config"
-	"haijiao-web/backend/internal/ffmpeg"
-	"haijiao-web/backend/internal/history"
-	"haijiao-web/backend/internal/monitor"
-	"haijiao-web/backend/web"
+	"github.com/apj9ehckiw/mediapulse/backend/internal/config"
+	"github.com/apj9ehckiw/mediapulse/backend/internal/ffmpeg"
+	"github.com/apj9ehckiw/mediapulse/backend/internal/history"
+	"github.com/apj9ehckiw/mediapulse/backend/internal/monitor"
+	"github.com/apj9ehckiw/mediapulse/backend/web"
 )
 
 // Server HTTP 服务。

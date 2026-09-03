@@ -1,9 +1,9 @@
-// haijiao-web 服务入口。
+// MediaPulse 服务入口。
 //
 // 环境变量（大部分配置已移至网页端设置页，持久化在 config.json）：
-//   HJ_ADDR        监听地址（默认 :8080）
-//   HJ_DATA_DIR    数据目录（默认 .）：config.json / state.json / downloads.json / videos/
-//   HJ_INTERVAL    首次启动的默认轮询间隔秒（之后以网页端配置为准）
+//   MP_ADDR        监听地址（默认 :8080）
+//   MP_DATA_DIR    数据目录（默认 .）：config.json / state.json / downloads.json / videos/
+//   MP_INTERVAL    首次启动的默认轮询间隔秒（之后以网页端配置为准）
 package main
 
 import (
@@ -12,11 +12,11 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"haijiao-web/backend/internal/api"
-	"haijiao-web/backend/internal/config"
-	"haijiao-web/backend/internal/ffmpeg"
-	"haijiao-web/backend/internal/history"
-	"haijiao-web/backend/internal/monitor"
+	"github.com/apj9ehckiw/mediapulse/backend/internal/api"
+	"github.com/apj9ehckiw/mediapulse/backend/internal/config"
+	"github.com/apj9ehckiw/mediapulse/backend/internal/ffmpeg"
+	"github.com/apj9ehckiw/mediapulse/backend/internal/history"
+	"github.com/apj9ehckiw/mediapulse/backend/internal/monitor"
 )
 
 func envStr(key, def string) string {
@@ -24,6 +24,14 @@ func envStr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// envStrCompat 带旧名回退：MP_ 未设置时尝试 HJ_（兼容旧部署）
+func envStrCompat(key, oldKey, def string) string {
+	if v := envStr(key, ""); v != "" {
+		return v
+	}
+	return envStr(oldKey, def)
 }
 
 func envInt(key string, def int) int {
@@ -38,20 +46,20 @@ func envInt(key string, def int) int {
 func main() {
 	log.SetFlags(log.Ltime)
 
-	dataDir := envStr("HJ_DATA_DIR", ".")
+	dataDir := envStrCompat("MP_DATA_DIR", "HJ_DATA_DIR", ".")
 
 	// 初始配置：首次运行时以环境变量为种子，之后一切以 config.json（网页端可改）为准
 	seed := config.Default()
-	seed.Interval = envInt("HJ_INTERVAL", seed.Interval)
-	seed.APIBase = envStr("HJ_API_BASE", seed.APIBase)
+	seed.Interval = envInt("MP_INTERVAL", seed.Interval)
+	seed.APIBase = envStrCompat("MP_API_BASE", "HJ_API_BASE", seed.APIBase)
 
 	store, err := config.Open(filepath.Join(dataDir, "config.json"), seed)
 	if err != nil {
 		log.Fatalf("open config: %v", err)
 	}
 
-	// HJ_PASSWORD：为配置种子访问密码（配置里已有密码时不覆盖）
-	if pw := os.Getenv("HJ_PASSWORD"); pw != "" {
+	// MP_PASSWORD：为配置种子访问密码（配置里已有密码时不覆盖）
+	if pw := envStrCompat("MP_PASSWORD", "HJ_PASSWORD", ""); pw != "" {
 		cfg := store.Get()
 		if cfg.Password == "" {
 			cfg.Password = pw
@@ -86,10 +94,10 @@ func main() {
 	}, hist)
 	mon.Run()
 
-	addr := envStr("HJ_ADDR", ":8080")
+	addr := envStrCompat("MP_ADDR", "HJ_ADDR", ":8080")
 	srv := api.New(mon, store, hist, addr, dataDir)
 	cfg := store.Get()
-	log.Printf("haijiao-web listening on %s (authors=%d, interval=%ds)",
+	log.Printf("mediapulse listening on %s (authors=%d, interval=%ds)",
 		addr, len(cfg.Authors), cfg.Interval)
 	log.Fatal(srv.ListenAndServe())
 }

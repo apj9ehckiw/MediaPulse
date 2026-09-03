@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"haijiao-web/backend/internal/ffmpeg"
-	"haijiao-web/backend/internal/site"
+	"github.com/apj9ehckiw/mediapulse/backend/internal/ffmpeg"
+	"github.com/apj9ehckiw/mediapulse/backend/internal/site"
 )
 
 // Progress 下载进度回调参数。

@@ -1,22 +1,22 @@
 services:
-  haijiao-web:
+  mediapulse:
     build: .
-    image: haijiao-web:latest
-    container_name: haijiao-web
+    image: mediapulse:latest
+    container_name: mediapulse
     restart: unless-stopped
     ports:
-      # 自定义端口：在 .env 里设置 HJ_PORT=9090（或启动时 HJ_PORT=9090 docker compose up -d）
+      # 自定义端口：在 .env 里设置 MP_PORT=9090（或启动时 MP_PORT=9090 docker compose up -d）
       # 冒号右边是容器内固定端口（8080），左边是宿主机访问端口
-      - "${HJ_PORT:-8080}:8080"
+      - "${MP_PORT:-8080}:8080"
     environment:
-      # 监听地址（容器内固定 8080，对外端口用 HJ_PORT 调整）
-      HJ_ADDR: ":8080"
+      # 监听地址（容器内固定 8080，对外端口用 MP_PORT 调整）
+      MP_ADDR: ":8080"
       # 数据目录（config.json / state.json / downloads.json / videos/）
-      HJ_DATA_DIR: "/data"
+      MP_DATA_DIR: "/data"
       # 首次启动的默认轮询间隔秒（之后以网页端「设置」为准）
-      HJ_INTERVAL: "600"
+      MP_INTERVAL: "600"
       # 首次启动种子访问密码（可选；不设置则首次打开网页走设置向导）
-      # HJ_PASSWORD: "your-password"
+      # MP_PASSWORD: "your-password"
     volumes:
       - ./data:/data   # videos/ 与 state.json 都落在宿主机 ./data
     healthcheck:

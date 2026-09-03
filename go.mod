@@ -1,4 +1,4 @@
-module haijiao-web
+module github.com/apj9ehckiw/mediapulse
 
 go 1.26.6
 
