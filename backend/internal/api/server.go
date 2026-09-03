@@ -90,6 +90,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/downloads/delete", s.handleDownloadsDelete)
 	mux.HandleFunc("GET /api/discovered", s.handleDiscovered)
 	mux.HandleFunc("POST /api/download", s.handleDownload)
+	mux.HandleFunc("POST /api/task/cancel", s.handleTaskCancel)
 	mux.HandleFunc("POST /api/discovered/dismiss", s.handleDismissDiscovered)
 	mux.HandleFunc("POST /api/authors/add", s.handleAddAuthor)
 	mux.HandleFunc("POST /api/authors/enable", s.handleAuthorEnable)
@@ -739,6 +740,26 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	enqueued := s.mon.EnqueueManual(req.TopicIDs)
 	writeJSON(w, map[string]any{"ok": true, "enqueued": enqueued})
+}
+
+// handleTaskCancel 取消下载任务（pending/resolving/downloading 可取消）。
+func (s *Server) handleTaskCancel(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TopicID int64 `json:"topicId"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.TopicID <= 0 {
+		http.Error(w, "topicId is required", http.StatusBadRequest)
+		return
+	}
+	if s.mon.CancelTask(req.TopicID) {
+		writeJSON(w, map[string]any{"ok": true})
+		return
+	}
+	http.Error(w, "任务不存在或当前状态不可取消", http.StatusConflict)
 }
 
 // handleDismissDiscovered 忽略选中的发现记录。

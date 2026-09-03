@@ -5,6 +5,7 @@ package downloader
 
 import (
 	"bytes"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/base64"
@@ -33,6 +34,8 @@ type Progress struct {
 type Options struct {
 	Workers    int           // 并发段数
 	OnProgress func(Progress)
+	// Context 取消信号（可选）：取消时未完成的段下载立即中断返回 ctx 错误。
+	Ctx context.Context
 }
 
 // Downloader 视频下载器。
@@ -165,9 +168,20 @@ func firstSegmentURL(m3u8URL, seg string) string {
 }
 
 // Download 下载完整 m3u8 视频，解密后按序写 TS，再 ffmpeg 封装为 MP4。
+// opt.Ctx 非空时支持取消：取消后中止段下载并清理临时文件。
 func (d *Downloader) Download(m3u8URL, outMP4 string, opt Options) error {
+	ctx := opt.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	pl, err := d.Client.ParsePlaylist(m3u8URL)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if opt.Workers > 0 {
@@ -176,6 +190,9 @@ func (d *Downloader) Download(m3u8URL, outMP4 string, opt Options) error {
 
 	key, err := d.resolveKey(pl, m3u8URL)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	iv, err := hexIV(pl.IVHex)
@@ -199,22 +216,44 @@ func (d *Downloader) Download(m3u8URL, outMP4 string, opt Options) error {
 	var sampleB atomic.Int64
 	sampleT.Store(start.UnixMilli())
 
+	setErr := func(err error) {
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+		}
+		errMu.Unlock()
+	}
+
 	for i, name := range pl.Segments {
+		// 已取消：不再派发新段
+		if ctx.Err() != nil {
+			break
+		}
 		wg.Add(1)
 		go func(idx int, segName string) {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				// 排队中取消：直接退出（wg.Add 已计）
+				if err := ctx.Err(); err != nil {
+					setErr(err)
+				}
+				return
+			}
+			if ctx.Err() != nil {
+				if err := ctx.Err(); err != nil {
+					setErr(err)
+				}
+				return
+			}
 			data, err := d.Client.FetchBytes(base + segName)
 			if err == nil {
 				data, err = decryptSegment(data, key, iv)
 			}
 			if err != nil {
-				errMu.Lock()
-				if firstErr == nil {
-					firstErr = fmt.Errorf("segment %d: %w", idx, err)
-				}
-				errMu.Unlock()
+				setErr(fmt.Errorf("segment %d: %w", idx, err))
 				return
 			}
 			buf[idx] = data
@@ -236,6 +275,9 @@ func (d *Downloader) Download(m3u8URL, outMP4 string, opt Options) error {
 		}(i, name)
 	}
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("已取消: %w", err)
+	}
 	if firstErr != nil {
 		return firstErr
 	}
@@ -246,11 +288,13 @@ func (d *Downloader) Download(m3u8URL, outMP4 string, opt Options) error {
 	// 按序写入临时 TS
 	tmpTS := outMP4 + ".ts.tmp"
 	if err := writeTS(tmpTS, buf); err != nil {
+		os.Remove(tmpTS)
 		return err
 	}
 
 	if err := remuxMP4(tmpTS, outMP4); err != nil {
 		os.Remove(tmpTS)
+		os.Remove(outMP4) // ffmpeg 可能留下半成品 mp4，一并清理
 		return err
 	}
 	os.Remove(tmpTS)
@@ -287,14 +331,11 @@ func writeTS(path string, buf [][]byte) error {
 
 // remuxMP4 ffmpeg 无损封装 TS -> MP4（+faststart 把 moov 移到文件头，
 // 浏览器无需 Range 跳到文件尾即可出首帧/缩略图）。
+// ffmpeg 查找顺序：包内已解析路径 → PATH → 数据目录 bin/（SetBinDir 注册）→ 工作目录 bin/。
 func remuxMP4(tsPath, mp4Path string) error {
-	ff := ffmpeg.Path()
+	ff := ffmpeg.Find(binDir)
 	if ff == "" {
-		if p, err := exec.LookPath("ffmpeg"); err == nil {
-			ff = p
-		} else {
-			return errors.New("ffmpeg 未就绪（自动安装中或失败，查看运行日志/设置页）")
-		}
+		return errors.New("ffmpeg 未就绪（自动安装中或失败，查看运行日志/设置页）")
 	}
 	var stderr bytes.Buffer
 	cmd := exec.Command(ff, "-y", "-loglevel", "error", "-i", tsPath,
@@ -305,6 +346,12 @@ func remuxMP4(tsPath, mp4Path string) error {
 	}
 	return nil
 }
+
+// binDir 数据目录（ffmpeg 兜底查找 bin/ 用），由 monitor 启动时注册。
+var binDir string
+
+// SetBinDir 注册数据目录（remux 兜底查 <dataDir>/bin/ffmpeg）。
+func SetBinDir(d string) { binDir = d }
 
 func truncate(s string, n int) string {
 	if len(s) > n {

@@ -461,6 +461,9 @@ input, select, textarea { font-family: inherit; }
 .task:last-child { border-bottom: 0; }
 .task:hover { background: var(--surface-hi); }
 .task .row1 { display: flex; align-items: center; gap: 9px; min-width: 0; }
+/* 任务行取消按钮：紧凑热区 */
+.task .task-cancel { padding: 5px; flex-shrink: 0; }
+.task .row1 .meta { flex-shrink: 0; }
 .task .title {
   flex: 1;
   min-width: 0;
@@ -491,6 +494,7 @@ input, select, textarea { font-family: inherit; }
 .status-chip.done { background: var(--ok-bg); color: var(--ok); }
 .status-chip.failed { background: var(--err-bg); color: var(--err); }
 .status-chip.skipped { background: var(--surface-3); color: var(--text-3); }
+.status-chip.canceled { background: var(--surface-3); color: var(--text-3); }
 
 /* 进度条 */
 .progressbar {

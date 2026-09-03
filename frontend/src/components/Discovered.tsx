@@ -38,6 +38,7 @@ const STATUS_TEXT: Record<TaskStatus, string> = {
   done: '已完成',
   failed: '失败',
   skipped: '已跳过',
+  canceled: '已取消',
 }
 
 export default function Discovered({ snapshot, version }: Props) {
@@ -303,9 +304,9 @@ export default function Discovered({ snapshot, version }: Props) {
                   className={`btn ${active ? 'ghost' : 'primary'}`}
                   onClick={() => download([r.topicId])}
                   disabled={active || busy}
-                  title={active ? '已在下载队列中' : st === 'failed' || st === 'skipped' ? '重试下载' : '下载此视频'}
+                  title={active ? '已在下载队列中' : st === 'failed' || st === 'skipped' || st === 'canceled' ? '重新下载' : '下载此视频'}
                 >
-                  {active ? '队列中' : st === 'failed' || st === 'skipped' ? '重试' : '下载'}
+                  {active ? '队列中' : st === 'failed' || st === 'skipped' || st === 'canceled' ? '重试' : '下载'}
                 </button>
               </div>
             )

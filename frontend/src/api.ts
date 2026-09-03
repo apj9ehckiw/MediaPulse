@@ -7,7 +7,7 @@ export interface Task {
   authorName?: string
   title: string
   createTime: string | null
-  status: 'pending' | 'resolving' | 'downloading' | 'done' | 'failed' | 'skipped'
+  status: 'pending' | 'resolving' | 'downloading' | 'done' | 'failed' | 'skipped' | 'canceled'
   progress: number
   segDone: number
   segTotal: number
@@ -212,6 +212,16 @@ export async function requestDownloads(topicIds: number[]): Promise<{ enqueued: 
   })
   if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`)
   return r.json()
+}
+
+/** 取消下载任务（排队中/解析中/下载中可取消；409 = 状态不可取消） */
+export async function cancelTask(topicId: number): Promise<void> {
+  const r = await fetch('/api/task/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topicId }),
+  })
+  if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`)
 }
 
 export async function dismissDiscovered(topicIds: number[]): Promise<void> {

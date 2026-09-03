@@ -2,6 +2,7 @@
 package monitor
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +31,7 @@ const (
 	StatusDone        Status = "done"
 	StatusFailed      Status = "failed"
 	StatusSkipped     Status = "skipped"
+	StatusCanceled    Status = "canceled" // 用户手动取消（可重新下载：发现页重新触发）
 )
 
 // Task 一次下载任务。
@@ -141,6 +143,8 @@ type Monitor struct {
 	stopCh   chan struct{}
 	subs     []func(Event)
 	lastCheck map[int64]string
+	// 任务取消信号：topicID -> cancel 函数（下载中/解析中的任务）
+	cancels map[int64]context.CancelFunc
 
 	hist *history.Store
 }
@@ -157,10 +161,13 @@ func New(store *config.Store, paths Paths, hist *history.Store) *Monitor {
 		dlWake:    make(chan struct{}, 1),
 		stopCh:    make(chan struct{}),
 		lastCheck: map[int64]string{},
+		cancels:   map[int64]context.CancelFunc{},
 		hist:      hist,
 	}
 	cfg := store.Get()
 	m.dl = downloader.New(m.client, cfg.Workers)
+	// 数据目录 bin/ 下的 ffmpeg（remux 兜底查找用）
+	downloader.SetBinDir(filepath.Dir(paths.StateFile))
 	m.loadState()
 	return m
 }
@@ -692,36 +699,126 @@ func (m *Monitor) triggerDL() {
 	}
 }
 
-// drainQueue 依序处理队列中的待下载任务（唯一下载执行点）。
-func (m *Monitor) drainQueue() {
-	for {
-		select {
-		case <-m.stopCh:
-			return
-		default:
-		}
-		m.mu.Lock()
-		var t *Task
-		for _, task := range m.queue {
-			if task.Status == StatusPending {
-				t = task
-				break
-			}
-		}
-		m.mu.Unlock()
-		if t == nil {
-			return
-		}
-		if err := m.downloadOne(t); err != nil {
-			m.addHistory(taskTopic(*t), "", 0, statusOf(err), err.Error())
-			m.emit("error", "帖子 %d 失败: %v", t.TopicID, err)
-		}
-		time.Sleep(time.Second)
+// dlConcurrency 同时下载的视频任务数（配置 workers 取半，最低 1 最高 4：
+// 单视频内部已是段级高并发，多视频并发主要用于多作者追更时不再串行等待）
+func (m *Monitor) dlConcurrency() int {
+	w := m.store.Get().Workers
+	n := w / 2
+	if n < 1 {
+		n = 1
 	}
+	if n > 4 {
+		n = 4
+	}
+	return n
+}
+
+// drainQueue 从队列取 pending 任务，交给并发 worker 池执行。
+// 每轮唤醒启动一批 worker，全部任务完成后返回（下轮唤醒再启动）。
+func (m *Monitor) drainQueue() {
+	workers := m.dlConcurrency()
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-m.stopCh:
+					return
+				default:
+				}
+				m.mu.Lock()
+				var t *Task
+				for _, task := range m.queue {
+					if task.Status == StatusPending {
+						t = task
+						break
+					}
+				}
+				if t != nil {
+					t.Status = StatusResolving // 立即占位，防止其他 worker 重复领取
+				}
+				m.mu.Unlock()
+				if t == nil {
+					return
+				}
+				if err := m.downloadOne(t); err != nil {
+					// 取消的任务不写失败历史（downloadOne 已置 canceled 状态）
+					if !errors.Is(err, errTaskCanceled) {
+						m.addHistory(taskTopic(*t), "", 0, statusOf(err), err.Error())
+						m.emit("error", "帖子 %d 失败: %v", t.TopicID, err)
+					}
+				}
+				time.Sleep(300 * time.Millisecond)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// errTaskCanceled 任务被用户取消（区分于失败：不写失败历史）。
+var errTaskCanceled = errors.New("task canceled")
+
+// CancelTask 取消任务：pending/resolving/downloading 状态可取消。
+// 返回是否实际执行了取消。
+func (m *Monitor) CancelTask(topicID int64) bool {
+	m.mu.Lock()
+	t, ok := m.tasks[topicID]
+	if !ok {
+		m.mu.Unlock()
+		return false
+	}
+	st := t.Status
+	cancelFn := m.cancels[topicID]
+	m.mu.Unlock()
+
+	switch st {
+	case StatusPending:
+		// 未开始：直接移出队列
+		m.mu.Lock()
+		t.Status = StatusCanceled
+		t.Error = ""
+		t.SpeedBps = 0
+		m.mu.Unlock()
+		m.emit("dim", "帖子 %d 已取消（未开始下载）", topicID)
+		return true
+	case StatusResolving, StatusDownloading:
+		// 进行中：触发 context 取消，downloadOne 会感知并置 canceled
+		if cancelFn != nil {
+			cancelFn()
+			return true
+		}
+		return false
+	}
+	return false
 }
 
 func taskTopic(t Task) site.Topic {
 	return site.Topic{TopicID: t.TopicID, AuthorUID: t.AuthorUID, Title: t.Title, CreateTime: t.CreateTime}
+}
+
+// isCanceled ctx 是否已被取消。
+func isCanceled(ctx context.Context) bool {
+	return ctx.Err() != nil
+}
+
+// cleanPartial 清理下载失败/取消的临时文件：.ts.tmp 与可能残留的半成品 mp4。
+// mp4 仅在小于 1MB 时删除（正常完成的文件不会走到这里，保守起见只删明显残缺的）。
+func cleanPartial(outPath string) {
+	os.Remove(outPath + ".ts.tmp")
+	if fi, err := os.Stat(outPath); err == nil && fi.Size() < 1<<20 {
+		os.Remove(outPath)
+	}
+}
+
+// taskCancelled 生成取消状态的任务更新函数。
+func taskCancelled(topicID int64, ctx context.Context) func(*Task) {
+	return func(t *Task) {
+		t.Status = StatusCanceled
+		t.Error = "已取消"
+		t.SpeedBps = 0
+	}
 }
 
 func authorNickname(topics []site.Topic) string {
@@ -881,7 +978,7 @@ func (m *Monitor) ClearDownloaded(ids []int64) int {
 }
 
 // EnqueueManual 将发现记录加入下载队列；返回实际入队数量。
-// 已下载的跳过；排队/下载中的跳过；失败/跳过的重置为待下载（重试）。
+// 已下载的跳过；排队/下载中的跳过；失败/跳过/已取消的重置为待下载（重试）。
 func (m *Monitor) EnqueueManual(ids []int64) int {
 	m.mu.Lock()
 	enqueued := 0
@@ -984,10 +1081,31 @@ func (m *Monitor) addHistory(t site.Topic, file string, sizeMB float64, status, 
 
 func (m *Monitor) downloadOne(t *Task) error {
 	topic := taskTopic(*t)
+	// 取消信号：CancelTask 调用 cancelFn 后，各阶段感知退出
+	ctx, cancel := context.WithCancel(context.Background())
+	m.mu.Lock()
+	m.cancels[topic.TopicID] = cancel
+	m.mu.Unlock()
+	defer func() {
+		cancel()
+		m.mu.Lock()
+		delete(m.cancels, topic.TopicID)
+		m.mu.Unlock()
+	}()
+
+	if err := ctx.Err(); err != nil {
+		m.setTask(topic.TopicID, func(t *Task) { t.Status = StatusCanceled })
+		return errTaskCanceled
+	}
+
 	m.setTask(topic.TopicID, func(t *Task) { t.Status = StatusResolving })
 
 	detail, err := m.client.Detail(topic.TopicID)
 	if err != nil {
+		if isCanceled(ctx) {
+			m.setTask(topic.TopicID, taskCancelled(topic.TopicID, ctx))
+			return errTaskCanceled
+		}
 		m.setTask(topic.TopicID, func(t *Task) { t.Status = StatusFailed; t.Error = err.Error(); t.SpeedBps = 0 })
 		return fmt.Errorf("detail: %w", err)
 	}
@@ -1005,6 +1123,10 @@ func (m *Monitor) downloadOne(t *Task) error {
 	}
 	full, err := m.client.ResolveFullM3u8(preview)
 	if err != nil {
+		if isCanceled(ctx) {
+			m.setTask(topic.TopicID, taskCancelled(topic.TopicID, ctx))
+			return errTaskCanceled
+		}
 		m.setTask(topic.TopicID, func(t *Task) { t.Status = StatusFailed; t.Error = err.Error(); t.SpeedBps = 0 })
 		return fmt.Errorf("resolve full m3u8: %w", err)
 	}
@@ -1014,6 +1136,10 @@ func (m *Monitor) downloadOne(t *Task) error {
 	title := detail.Title
 	if title == "" {
 		title = topic.Title
+	}
+	if isCanceled(ctx) {
+		m.setTask(topic.TopicID, taskCancelled(topic.TopicID, ctx))
+		return errTaskCanceled
 	}
 	// 按作者分文件夹：videos/<作者名>/<标题-作者名>.mp4
 	authorFolder := safeName(m.authorName(topic.AuthorUID), 40)
@@ -1033,6 +1159,7 @@ func (m *Monitor) downloadOne(t *Task) error {
 
 	m.setTask(topic.TopicID, func(t *Task) { t.Status = StatusDownloading })
 	err = m.dl.Download(full, outPath, downloader.Options{
+		Ctx: ctx,
 		OnProgress: func(p downloader.Progress) {
 			m.setTask(topic.TopicID, func(t *Task) {
 				t.SegDone, t.SegTotal = p.Done, p.Total
@@ -1045,11 +1172,25 @@ func (m *Monitor) downloadOne(t *Task) error {
 		},
 	})
 	if err != nil {
+		if isCanceled(ctx) {
+			m.setTask(topic.TopicID, taskCancelled(topic.TopicID, ctx))
+			// 清理可能残留的临时 TS 与半成品 mp4
+			cleanPartial(outPath)
+			m.emit("dim", "帖子 %d 下载已取消（已下载 %.1f MB）", topic.TopicID, float64(t.BytesDone)/1048576)
+			return errTaskCanceled
+		}
 		m.setTask(topic.TopicID, func(t *Task) { t.Status = StatusFailed; t.Error = err.Error(); t.SpeedBps = 0 })
+		// 失败清理：临时 TS + remux 失败可能残留的半成品 mp4（视频库不出现坏文件）
+		cleanPartial(outPath)
+		m.emit("dim", "帖子 %d 失败，已清理临时文件", topic.TopicID)
 		return err
 	}
 
-	fi, _ := os.Stat(outPath)
+	fi, err := os.Stat(outPath)
+	if err != nil {
+		m.setTask(topic.TopicID, func(t *Task) { t.Status = StatusFailed; t.Error = "输出文件缺失: " + err.Error() })
+		return fmt.Errorf("stat output: %w", err)
+	}
 	sizeMB := float64(fi.Size()) / 1048576
 	m.mu.Lock()
 	m.state.Topics[topic.TopicID] = DownloadedRecord{

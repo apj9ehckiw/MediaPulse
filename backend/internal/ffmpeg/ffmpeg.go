@@ -96,11 +96,47 @@ func Detect(binDir string) (string, bool) {
 	if p, err := exec.LookPath(binName); err == nil {
 		return p, true
 	}
-	local := filepath.Join(binDir, binName+exeExt())
-	if fi, err := os.Stat(local); err == nil && fi.Mode().IsRegular() && fi.Size() > 1<<20 {
-		return local, true
+	// 依次尝试各候选目录（可传多个：数据目录 bin/、工作目录 bin/ 等）
+	for _, dir := range candidateDirs(binDir) {
+		local := filepath.Join(dir, binName+exeExt())
+		if fi, err := os.Stat(local); err == nil && fi.Mode().IsRegular() && fi.Size() > 1<<20 {
+			return local, true
+		}
 	}
 	return "", false
+}
+
+// candidateDirs 去重后的候选目录列表：显式 binDir 优先，另含工作目录 bin/ 与 ./bin。
+func candidateDirs(binDir string) []string {
+	var dirs []string
+	seen := map[string]bool{}
+	add := func(d string) {
+		if d == "" {
+			return
+		}
+		abs, err := filepath.Abs(d)
+		if err != nil || seen[abs] {
+			return
+		}
+		seen[abs] = true
+		dirs = append(dirs, d)
+	}
+	add(binDir)
+	add("bin")                 // 工作目录下 bin/（用户手动放置）
+	add(filepath.Join(".", "bin"))
+	return dirs
+}
+
+// Find 兜底查找一次可用 ffmpeg（不改变安装状态）：PATH → 已解析路径 → binDir → 工作目录 bin/。
+// remux 等直接调用方在 Path() 为空时用此兜底。
+func Find(binDir string) string {
+	if p := Path(); p != "" {
+		return p
+	}
+	if p, ok := Detect(binDir); ok {
+		return p
+	}
+	return ""
 }
 
 // Ensure 检测 ffmpeg：存在则置 ready；缺失时默认只置 missing 提示用户（不自动下载）。
@@ -154,9 +190,16 @@ func Install(binDir string) error {
 		mu.Unlock()
 		return err
 	}
-	mu.Lock()
-	binPath, state, lastErr = filepath.Join(binDir, binName+exeExt()), "ready", ""
-	mu.Unlock()
+	// 安装后重新检测（binDir 优先，统一走 Detect 逻辑）
+	if p, ok := Detect(binDir); ok {
+		mu.Lock()
+		binPath, state, lastErr = p, "ready", ""
+		mu.Unlock()
+	} else {
+		mu.Lock()
+		binPath, state, lastErr = filepath.Join(binDir, binName+exeExt()), "ready", ""
+		mu.Unlock()
+	}
 	return nil
 }
 
