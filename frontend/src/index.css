@@ -204,6 +204,29 @@ input, select, textarea { font-family: inherit; }
 .sidebar-foot .meta-row { display: flex; align-items: center; gap: 7px; }
 .sidebar-foot .meta-row svg { color: var(--text-4); flex-shrink: 0; }
 
+/* 版本号（侧栏底部首行） */
+.sidebar-foot .version-row {
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.sidebar-foot .version-tag {
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--text-2);
+  letter-spacing: 0.2px;
+}
+.sidebar-foot .version-num {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  white-space: nowrap;
+}
+
 /* 内容区 */
 .content {
   display: flex;

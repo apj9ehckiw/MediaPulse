@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/apj9ehckiw/mediapulse/backend/internal/config"
@@ -47,6 +48,20 @@ const (
 	sessionCookie = "hj_session"
 	sessionTTL    = 30 * 24 * time.Hour
 )
+
+// appVersion 当前程序版本（main 启动时注入，默认 dev；前端侧栏底部显示）。
+var appVersion = atomic.Value{}
+
+// SetVersion 设置版本号（main 启动时调用一次）。
+func SetVersion(v string) { appVersion.Store(v) }
+
+// Version 返回版本号（未设置时 dev）。
+func Version() string {
+	if v, ok := appVersion.Load().(string); ok && v != "" {
+		return v
+	}
+	return "dev"
+}
 
 // New 创建服务。
 func New(mon *monitor.Monitor, store *config.Store, hist *history.Store, addr, dataDir string) *Server {
@@ -444,7 +459,11 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, s.mon.Snapshot())
+	snap := s.mon.Snapshot()
+	writeJSON(w, map[string]any{
+		"version": Version(),
+		"snapshot": snap,
+	})
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

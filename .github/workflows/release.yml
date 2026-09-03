@@ -57,7 +57,11 @@ jobs:
           CGO_ENABLED: 0
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: go build -trimpath -ldflags "-s -w" -o mediapulse${{ matrix.ext }} ./backend/cmd/server
+        # 版本号注入 main.version（标签构建用 tag 名，手动构建用 short SHA）
+        run: |
+          VER="${GITHUB_REF_NAME}"
+          if ! [[ "$VER" =~ ^v[0-9] ]]; then VER="dev-$(git rev-parse --short HEAD)"; fi
+          go build -trimpath -ldflags "-s -w -X main.version=$VER" -o mediapulse${{ matrix.ext }} ./backend/cmd/server
 
       - name: Package
         run: |

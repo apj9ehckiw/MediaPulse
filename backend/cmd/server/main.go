@@ -19,6 +19,10 @@ import (
 	"github.com/apj9ehckiw/mediapulse/backend/internal/monitor"
 )
 
+// version 构建时注入（release.yml: -ldflags "-X main.version=<tag>"）；
+// 本地 go build 默认 dev。
+var version = "dev"
+
 func envStr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -105,8 +109,9 @@ func main() {
 
 	addr := envStrCompat("MP_ADDR", "HJ_ADDR", ":8080")
 	srv := api.New(mon, store, hist, addr, dataDir)
+	api.SetVersion(version)
 	cfg := store.Get()
-	log.Printf("mediapulse listening on %s (authors=%d, interval=%ds)",
-		addr, len(cfg.Authors), cfg.Interval)
+	log.Printf("mediapulse %s listening on %s (authors=%d, interval=%ds)",
+		version, addr, len(cfg.Authors), cfg.Interval)
 	log.Fatal(srv.ListenAndServe())
 }

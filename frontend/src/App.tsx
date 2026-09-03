@@ -53,6 +53,7 @@ export default function App() {
   const [downloadsVersion, setDownloadsVersion] = useState(0)
   const [discoveredVersion, setDiscoveredVersion] = useState(0)
   const [checkWaiting, setCheckWaiting] = useState(false)
+  const [version, setVersion] = useState('')
   const waitStartRef = useRef(0)
   const esRef = useRef<EventSource | null>(null)
 
@@ -63,9 +64,11 @@ export default function App() {
       fetchAuthState().then(setAuthState)
       return
     }
-    const [s, v] = await Promise.all([r.json(), fetchVideos()])
+    const [d, v] = await Promise.all([r.json(), fetchVideos()])
+    const s = d.snapshot
     setSnapshot(s)
     setVideos(v)
+    if (d.version) setVersion(d.version as string)
     // 检查已真正开始：交给后端 checking 状态；长时间未开始（如没有启用作者）：兜底释放
     if (s.checking) {
       setCheckWaiting(false)
@@ -177,6 +180,10 @@ export default function App() {
           })}
         </nav>
         <div className="sidebar-foot">
+          <div className="meta-row version-row" title={`MediaPulse ${version || '...'}`}>
+            <span className="version-tag">MediaPulse</span>
+            <span className="version-num">{version || '…'}</span>
+          </div>
           <div className="meta-row">
             <IconGlobe size={12} />
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
