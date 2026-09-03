@@ -91,7 +91,14 @@ type Client struct {
 func New(base string) *Client {
 	return &Client{
 		Base: strings.TrimRight(base, "/"),
-		HTTP: &http.Client{Timeout: 60 * time.Second},
+		HTTP: &http.Client{
+			Timeout: 60 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        64,
+				MaxIdleConnsPerHost: 64, // 段下载高并发复用连接
+				IdleConnTimeout:     90 * time.Second,
+			},
+		},
 		Limit: 50,
 	}
 }

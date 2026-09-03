@@ -3,6 +3,7 @@ package config
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,13 @@ type Config struct {
 	// 空 = 不限制（所有新发现的视频都自动下载）。
 	// 手动「发现」页下载不受此限制。
 	AutoDownloadAfter string `json:"autoDownloadAfter,omitempty"`
+	// GitHub 加速代理前缀：仅作用于 ffmpeg 安装包下载（Windows/macOS 的下载源在 GitHub，
+	// 国内直连慢）。如 https://ghproxy.net/ 或 https://mirror.ghproxy.com/ ；
+	// 用法为 <代理前缀>https://github.com/... （前缀拼接原始 URL）。
+	// 空 = 直连 GitHub。Linux 的 johnvansickle.com 源不走代理。
+	GitHubProxy        string `json:"githubProxy,omitempty"`
+	// ffmpeg 自动下载开关：默认 false = 缺失时仅提示用户，由用户在设置页手动触发安装。
+	FFmpegAutoInstall bool   `json:"ffmpegAutoInstall,omitempty"`
 	Password          string `json:"password,omitempty"`     // 访问密码；空 = 无密码
 	AuthDisabled      bool   `json:"authDisabled,omitempty"` // true = 显式停用鉴权（首次部署的设置密码向导不再出现）
 }
@@ -129,6 +137,16 @@ func validate(c *Config) error {
 	}
 	if c.ListType != 0 && c.ListType != 1 && c.ListType != 3 {
 		c.ListType = 1
+	}
+	// GitHub 加速代理前缀：须以 / 结尾的 URL（http/https），拼接在原始 GitHub 直链前；
+	// 非法输入清空 = 直连
+	if p := strings.TrimSpace(c.GitHubProxy); p != "" {
+		u, err := url.Parse(p)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			c.GitHubProxy = ""
+		} else if !strings.HasSuffix(c.GitHubProxy, "/") {
+			c.GitHubProxy = c.GitHubProxy + "/"
+		}
 	}
 	// 自动下载发布时间下限：仅接受 YYYY-MM-DD；非法/零值清空 = 不限制
 	if t, err := time.Parse("2006-01-02", strings.TrimSpace(c.AutoDownloadAfter)); err != nil || t.IsZero() {

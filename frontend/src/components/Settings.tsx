@@ -32,7 +32,7 @@ export default function Settings({ onSaved }: Props) {
     fetchFFmpeg().then(setFf).catch(() => {})
   }
 
-  // 触发安装后轮询状态直到结束（最长 15 分钟）
+  // 触发安装后轮询状态直到结束（最长 15 分钟；安装中 1s 轮询让进度及时）
   const installFF = async () => {
     setFfBusy(true)
     try {
@@ -50,7 +50,7 @@ export default function Settings({ onSaved }: Props) {
           clearInterval(timer)
           setFfBusy(false)
         }
-      }, 3000)
+      }, 1000)
     } catch (e) {
       setErr(String(e))
       setFfBusy(false)
@@ -220,12 +220,45 @@ export default function Settings({ onSaved }: Props) {
               ) : '检测中...'}
             </span>
             <button className="btn ghost" onClick={installFF} disabled={ffBusy || ff?.state === 'installing'}>
-              {ff?.state === 'ready' ? '重新检测' : '检测 / 安装'}
+              {ff?.state === 'ready' ? '重新检测' : ff?.state === 'missing' ? '下载并安装' : '检测 / 安装'}
             </button>
           </div>
+          {ff?.state === 'missing' && (
+            <div className="ff-banner" role="alert">
+              <b>未检测到 ffmpeg</b>
+              <span>视频下载完成后需 ffmpeg 封装为 MP4。点击右侧「下载并安装」（约 80–130 MB，
+                下载进度见「概览」页实时日志），或自行安装到 PATH 后点「重新检测」。</span>
+            </div>
+          )}
+          <div className="form-row">
+            <label>GitHub 加速代理</label>
+            <input
+              className="input"
+              type="text"
+              placeholder="如 https://ghproxy.net/（留空 = 直连）"
+              value={cfg.githubProxy ?? ''}
+              onChange={(e) => setCfg({ ...cfg, githubProxy: e.target.value })}
+            />
+          </div>
           <div className="hint">
-            启动时自动检测 ffmpeg（PATH 与数据目录 bin/），缺失时按平台/架构自动下载安装；
-            下载约 80–130 MB，进度见运行日志。
+            ffmpeg 安装包（Windows/macOS）从 GitHub 下载，国内直连较慢时可填写加速代理前缀，
+            用法 <code>&lt;代理前缀&gt;https://github.com/...</code>（如 ghproxy.net、mirror.ghproxy.com）。
+            仅影响 ffmpeg 安装包下载，视频下载不走此代理。
+          </div>
+          <div className="form-row">
+            <label>ffmpeg 自动安装</label>
+            <label className="switch-label">
+              <input
+                type="checkbox"
+                checked={!!cfg.ffmpegAutoInstall}
+                onChange={(e) => setCfg({ ...cfg, ffmpegAutoInstall: e.target.checked })}
+              />
+              {cfg.ffmpegAutoInstall ? '缺失时自动下载安装' : '关闭（默认）：缺失时仅提示'}
+            </label>
+          </div>
+          <div className="hint">
+            默认不自动下载：检测到 ffmpeg 缺失时仅在设置页提示，由你手动点击「下载并安装」；
+            开启后恢复启动时自动安装。安装位置为数据目录 bin/。
           </div>
           <div className="form-row">
             <label>访问密码</label>

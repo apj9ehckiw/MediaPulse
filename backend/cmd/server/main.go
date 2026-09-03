@@ -69,10 +69,19 @@ func main() {
 		}
 	}
 
-	// ffmpeg 自动检测/下载（后台执行，不阻塞启动；结果写运行日志）
+	// ffmpeg 检测（后台执行，不阻塞启动；结果写运行日志）
+	// 默认不自动下载：缺失时置 missing 状态，网页端提示用户手动触发安装；
+	// 配置 FFmpegAutoInstall=true 时保持自动下载。
+	cfg0 := store.Get()
+	ffmpeg.SetAutoInstall(cfg0.FFmpegAutoInstall)
+	ffmpeg.SetGitHubProxy(cfg0.GitHubProxy)
 	go func() {
 		if err := ffmpeg.Ensure(dataDir); err != nil {
 			log.Printf("[ffmpeg] %v", err)
+			return
+		}
+		if st, _ := ffmpeg.Status(); st == "missing" {
+			log.Printf("[ffmpeg] 未检测到：请在网页端「设置」页手动触发安装")
 			return
 		}
 		log.Printf("[ffmpeg] ready: %s", ffmpeg.Path())

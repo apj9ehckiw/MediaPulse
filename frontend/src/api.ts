@@ -94,6 +94,10 @@ export interface AppConfig {
   autoDownload: boolean
   /** 自动下载仅限发布时间在该日期（YYYY-MM-DD，含当天之后）之后的帖子；空 = 不限制 */
   autoDownloadAfter?: string
+  /** GitHub 加速代理前缀（仅作用于 ffmpeg 安装包下载）；空 = 直连 */
+  githubProxy?: string
+  /** ffmpeg 缺失时是否自动下载安装；默认 false = 提示用户手动触发 */
+  ffmpegAutoInstall?: boolean
   /** 服务端不回传真实密码；提交时非空 = 设置新密码 */
   password?: string
   hasPassword?: boolean

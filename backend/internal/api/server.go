@@ -388,9 +388,30 @@ func (s *Server) handleFFmpegStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleFFmpegInstall 手动触发 ffmpeg 检测/下载安装（后台执行）。
+// 下载进度通过事件流推送（网页端日志与设置页可见）。
 func (s *Server) handleFFmpegInstall(w http.ResponseWriter, r *http.Request) {
 	binDir := filepath.Join(s.dataDir, "bin")
+	// 应用当前配置的 GitHub 加速代理（设置页可改，安装前生效）
+	cfg := s.store.Get()
+	ffmpeg.SetGitHubProxy(cfg.GitHubProxy)
+	// 注册进度回调 -> 事件流（约每 2MB 一次，避免刷屏）
+	lastMB := int64(-1)
+	ffmpeg.SetProgressFn(func(done, total int64) {
+		mb := done / 1048576
+		if total > 0 {
+			if mb/8 != lastMB || done == total {
+				lastMB = mb / 8
+				s.mon.EmitInfo("ffmpeg 下载中: %s / %s（%.0f%%）",
+					humanBytes(done), humanBytes(total), float64(done)/float64(total)*100)
+			}
+		} else if mb/32 != lastMB {
+			lastMB = mb / 32
+			s.mon.EmitInfo("ffmpeg 下载中: %s（大小未知）", humanBytes(done))
+		}
+	})
 	go func() {
+		defer ffmpeg.SetProgressFn(nil)
+		s.mon.EmitInfo("开始下载安装 ffmpeg（平台 %s/%s）", runtime.GOOS, runtime.GOARCH)
 		if err := ffmpeg.Install(binDir); err != nil {
 			s.mon.EmitInfo("ffmpeg 安装失败: %v", err)
 			return
@@ -398,6 +419,15 @@ func (s *Server) handleFFmpegInstall(w http.ResponseWriter, r *http.Request) {
 		s.mon.EmitInfo("ffmpeg 已就绪: %s", ffmpeg.Path())
 	}()
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// humanBytes 字节数人性化显示。
+func humanBytes(n int64) string {
+	const unit = 1048576
+	if n >= unit {
+		return fmt.Sprintf("%.1f MB", float64(n)/float64(unit))
+	}
+	return fmt.Sprintf("%.0f KB", float64(n)/1024)
 }
 
 // ListenAndServe 启动。
@@ -496,6 +526,8 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"workers":             cfg.Workers,
 		"autoDownload":        cfg.AutoDownload,
 		"autoDownloadAfter":   cfg.AutoDownloadAfter,
+		"githubProxy":         cfg.GitHubProxy,
+		"ffmpegAutoInstall":   cfg.FFmpegAutoInstall,
 		"hasPassword":         has,
 		"authDisabled":        cfg.AuthDisabled,
 	})
@@ -538,7 +570,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if strings.ContainsRune(c.AutoDownloadAfter, 0xFFFD) || strings.ContainsRune(c.APIBase, 0xFFFD) || strings.ContainsRune(c.Password, 0xFFFD) {
+	if strings.ContainsRune(c.AutoDownloadAfter, 0xFFFD) || strings.ContainsRune(c.APIBase, 0xFFFD) || strings.ContainsRune(c.Password, 0xFFFD) || strings.ContainsRune(c.GitHubProxy, 0xFFFD) {
 		http.Error(w, "配置字段包含乱码（非 UTF-8 输入），请通过网页端修改", http.StatusBadRequest)
 		return
 	}
@@ -551,6 +583,9 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// ffmpeg 自动安装开关即时生效（下次检测/启动时应用）
+	ffmpeg.SetAutoInstall(updated.FFmpegAutoInstall)
+	ffmpeg.SetGitHubProxy(updated.GitHubProxy)
 	// 密码变更后作废所有旧会话
 	if updated.Password != old.Password {
 		s.dropAllSessions()
@@ -568,6 +603,8 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		"workers":           updated.Workers,
 		"autoDownload":      updated.AutoDownload,
 		"autoDownloadAfter": updated.AutoDownloadAfter,
+		"githubProxy":       updated.GitHubProxy,
+		"ffmpegAutoInstall": updated.FFmpegAutoInstall,
 		"hasPassword":       has,
 		"authDisabled":      authOff,
 	})
