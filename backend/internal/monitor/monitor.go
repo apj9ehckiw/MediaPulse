@@ -411,6 +411,12 @@ func (m *Monitor) TriggerCheck() {
 	}
 }
 
+// CheckAuthorAsync 增量检查单个作者（异步，不触发全局 checkAll）。
+// 供 API 层在新增/启用单个作者时使用：只拉该作者的列表。
+func (m *Monitor) CheckAuthorAsync(a config.AuthorConfig) {
+	go m.checkAuthor(a)
+}
+
 // EmitInfo 写入一条 info 事件（供 API 层记录网页端操作）。
 func (m *Monitor) EmitInfo(format string, args ...any) {
 	m.emit("info", format, args...)
@@ -893,8 +899,9 @@ func (m *Monitor) AddAuthor(uid int64) (config.AuthorConfig, error) {
 	if err != nil {
 		return config.AuthorConfig{}, err
 	}
-	m.emit("ok", "已添加作者 %s（共 %d 帖），开始检查", nick, total)
-	m.TriggerCheck()
+	m.emit("ok", "已添加作者 %s（共 %d 帖），开始增量检查（只检查该作者）", nick, total)
+	// 增量：只检查新作者，不触发全局 checkAll（避免重新拉取全部已有作者的列表）
+	go m.checkAuthor(config.AuthorConfig{UID: uid, Note: nick, Enabled: true})
 	for _, a := range updated.Authors {
 		if a.UID == uid {
 			return a, nil
@@ -924,8 +931,8 @@ func (m *Monitor) SetAuthorEnabled(uid int64, enabled bool) (config.AuthorConfig
 	for _, a := range updated.Authors {
 		if a.UID == uid {
 			if enabled {
-				m.emit("ok", "已启用作者 %s，立即检查", m.authorName(uid))
-				m.TriggerCheck()
+				m.emit("ok", "已启用作者 %s，增量检查该作者", m.authorName(uid))
+				go m.checkAuthor(a)
 			} else {
 				m.emit("info", "已停用作者 %s", m.authorName(uid))
 			}

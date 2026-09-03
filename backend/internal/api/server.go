@@ -612,8 +612,24 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if updated.Password != old.Password {
 		s.dropAllSessions()
 	}
-	// 配置生效：触发一次检查（新作者立即被扫描）
-	s.mon.TriggerCheck()
+	// 配置生效：新增了作者时只增量检查新作者（不重查全部）；
+	// 其他配置变更（基址/自动下载等）才触发全量检查
+	if len(updated.Authors) > len(old.Authors) {
+		for _, na := range updated.Authors {
+			newAuthor := true
+			for _, oa := range old.Authors {
+				if oa.UID == na.UID {
+					newAuthor = false
+					break
+				}
+			}
+			if newAuthor {
+				s.mon.CheckAuthorAsync(na)
+			}
+		}
+	} else {
+		s.mon.TriggerCheck()
+	}
 	has := updated.Password != ""
 	authOff := updated.AuthDisabled
 	updated.Password = ""
