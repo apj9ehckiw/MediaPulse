@@ -57,6 +57,14 @@
 
 html, body, #root { height: 100%; }
 
+/* 触摸滚动惯性 + 禁止长按选中图片类元素 */
+body {
+  -webkit-overflow-scrolling: touch;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+img, video, svg { -webkit-touch-callout: none; user-select: none; }
+
 body {
   background: var(--bg);
   color: var(--text-1);
@@ -202,7 +210,9 @@ input, select, textarea { font-family: inherit; }
   flex-direction: column;
   min-width: 0;
   padding: 0 30px 34px;
+  width: 100%;
   max-width: 1340px;
+  margin: 0 auto; /* 超大屏居中 */
 }
 
 .topbar {
@@ -428,7 +438,11 @@ input, select, textarea { font-family: inherit; }
 }
 .dash .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .log-card { position: sticky; top: 76px; }
-.log-card .log { height: calc(100vh - 200px); min-height: 320px; background: var(--surface-2); }
+/* 日志高度随视口：约半屏，限制上下限，窄屏单列时稍矮（dvh 适配移动端地址栏） */
+.log-card .log {
+  height: clamp(280px, calc(100dvh - 220px), 720px);
+  background: var(--surface-2);
+}
 
 /* ============================================================
    任务列表
@@ -1174,7 +1188,7 @@ select.input { cursor: pointer; }
 @media (max-width: 1180px) {
   .dash { grid-template-columns: 1fr; }
   .log-card { position: static; }
-  .log-card .log { height: 300px; }
+  .log-card .log { height: clamp(240px, 38dvh, 420px); }
   .stat, .stat.wide { grid-column: span 6; }
 }
 
@@ -1187,15 +1201,26 @@ select.input { cursor: pointer; }
     flex-direction: row;
     align-items: center;
     padding: 10px 14px;
+    padding-top: calc(10px + env(safe-area-inset-top)); /* 刘海屏状态栏不遮 */
     border-right: 0;
     border-bottom: 1px solid var(--border);
     gap: 10px;
+    z-index: 30;
   }
   .brand { padding: 0; }
+  .brand .logo-img { width: 34px; height: 34px; }
   .brand h1 { display: none; }
   .brand .sub { display: none; }
-  .nav { flex-direction: row; flex: 1; justify-content: flex-end; }
-  .nav-item { padding: 9px 12px; width: auto; }
+  .nav {
+    flex-direction: row;
+    flex: 1;
+    justify-content: flex-end;
+    overflow-x: auto; /* 图标过多时横向滚动，不换行撑高头部 */
+    scrollbar-width: none;
+  }
+  .nav::-webkit-scrollbar { display: none; }
+  /* 触摸目标：≥40px 热区 */
+  .nav-item { padding: 10px 13px; width: auto; flex-shrink: 0; min-height: 40px; }
   .nav-item.active::before { display: none; }
   .nav-item .nav-label { display: none; }
   .nav-item .badge { margin-left: 2px; }
@@ -1204,13 +1229,70 @@ select.input { cursor: pointer; }
   .form-row { flex-wrap: wrap; }
   .form-row > label { width: 100%; }
   .author-stat { flex-basis: 100%; text-align: left; }
+  /* 日志：矮屏更低，保持滚动（dvh 适配移动浏览器地址栏伸缩） */
+  .log-card .log { height: clamp(200px, 32dvh, 320px); }
+  /* 视频库网格：手机 2 列起 */
+  .video-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; padding: 10px; }
+  /* 统计卡：手机 2 列 */
+  .stat, .stat.wide { grid-column: span 6; }
+  /* 工具栏（发现/下载页）：按钮组换行铺开 */
+  .disc-toolbar { flex-direction: column; align-items: stretch; }
+  .disc-toolbar .filter-row,
+  .disc-actions { justify-content: flex-start; }
+  .disc-time .input { width: min(200px, 58vw); }
+  /* iOS：输入框字号 <16px 聚焦会自动放大页面，统一提到 16px */
+  .input, .disc-time .input, .lib-search .input, .afb-search .input,
+  .disc-author .input, .auto-after .input { font-size: 16px !important; }
+  /* 触摸目标：按钮/复选热区 ≥40px */
+  .btn { min-height: 40px; }
+  .chip-btn { min-height: 38px; }
+  .row-check { width: 22px; height: 22px; }
+  .afb-option { padding: 11px 10px; min-height: 44px; }
+  .switch-label input { width: 20px; height: 20px; }
+  /* 下载/发现列表行：换行堆叠，操作按钮不再挤压标题 */
+  .dl-item { flex-wrap: wrap; }
+  .dl-item .dl-body { flex-basis: calc(100% - 30px); }
+  .dl-item .btn { margin-left: 30px; }
+  /* 作者管理行：堆叠 */
+  .author-card-row { flex-wrap: wrap; }
+  .author-card-row .a-main { flex-basis: 100%; }
+  .author-card-row .a-stats { flex-wrap: wrap; }
+  /* 播放弹窗：贴边满宽，视频 48dvh，底部安全区不被 Home 条遮挡 */
+  .modal-box video { max-height: 48dvh; }
+  .modal-overlay { padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  .modal-foot { padding-bottom: calc(11px + env(safe-area-inset-bottom)); }
+  /* 悬浮筛选窗宽度贴边 */
+  .afb-panel { width: min(288px, calc(100vw - 28px)); }
+  .afb { right: 12px; }
+  /* 顶栏：标题与操作换行 */
+  .topbar { flex-wrap: wrap; }
+  .topbar-actions { flex-wrap: wrap; }
+  .check-btn { flex: 1; justify-content: center; }
+  /* 视频卡片：触摸更易点、元信息字号稍大 */
+  .video-card { cursor: default; -webkit-user-select: none; user-select: none; }
+  .video-card .v-meta { font-size: 11px; }
+  /* 设置/作者页底部安全区 */
+  .settings-wrap { padding-bottom: env(safe-area-inset-bottom); }
+  .save-row { padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
+}
+
+/* 手机竖屏（≤560px）：统计卡 2 列、设置表单窄化 */
+@media (max-width: 560px) {
+  /* 12 列网格改为 6 列（每卡半宽），手机 2 列卡片 */
+  .stats-grid { grid-template-columns: repeat(6, 1fr); }
+  .stat, .stat.wide { grid-column: span 3; }
+  .form-row .input { max-width: 100%; }
+  .add-form { flex-wrap: wrap; }
+  .add-form .input.uid { max-width: 100%; }
+  .login-box { padding: 20px 16px; }
+  .content { padding: 0 10px 20px; }
 }
 
 /* ============================================================
    登录页 / 退出按钮 / ffmpeg 状态行
    ============================================================ */
 .login-wrap {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   background: var(--bg, #f1f5f9);
