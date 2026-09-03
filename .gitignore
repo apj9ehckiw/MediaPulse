@@ -1,0 +1,22 @@
+# 构建产物
+server.exe
+frontend/node_modules/
+frontend/tsconfig.tsbuildinfo
+backend/web/dist/
+
+# 运行数据（部署环境生成，不入库）
+config.json
+state.json
+downloads.json
+sessions.json
+videos/
+server-run.log
+
+# 前端研究 / 浏览器版源
+../research/
+../source/
+
+# 杂项
+*.log
+*.tmp
+.DS_Store

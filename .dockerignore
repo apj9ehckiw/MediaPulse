@@ -1,0 +1,14 @@
+node_modules/
+frontend/node_modules/
+backend/web/dist/
+*.exe
+videos/
+data/
+config.json
+config.json.bak
+state.json
+downloads.json
+sessions.json
+server-run.log
+*.ts.tmp
+.git/
