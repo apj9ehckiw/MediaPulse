@@ -1,0 +1,85 @@
+name: release
+
+# 手动触发 或 推送 v* 标签时构建并发布 Release
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # 创建 Release 并上传产物
+
+jobs:
+  build:
+    name: Build (${{ matrix.goos }}-${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+            ext: .exe
+            archive: zip
+          - goos: linux
+            goarch: amd64
+            archive: tar.gz
+          - goos: linux
+            goarch: arm64
+            archive: tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: false # 模块在仓库根，默认缓存路径需保留；编译快，无需缓存
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+          # 产物在 ../backend/web/dist（vite outDir）
+
+      - name: Build backend
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -trimpath -ldflags "-s -w" -o mediapulse${{ matrix.ext }} ./backend/cmd/server
+
+      - name: Package
+        run: |
+          mkdir -p dist/release
+          cp mediapulse${{ matrix.ext }} dist/release/
+          cp README.md .env.example dist/release/
+          cd dist/release
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            zip -r "../mediapulse-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.zip" .
+          else
+            tar -czf "../mediapulse-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" .
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mediapulse-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/mediapulse-*
+
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/mediapulse-*
+          generate_release_notes: true
