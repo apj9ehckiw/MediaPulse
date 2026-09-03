@@ -20,6 +20,13 @@ function fmtSpeed(bps?: number): string {
   return `${(bps / 1024).toFixed(0)} KB/s`
 }
 
+/** 已下载量展示：MB / KB */
+function fmtSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '0 MB'
+  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`
+  return `${(bytes / 1024).toFixed(0)} KB`
+}
+
 /** 可取消的状态 */
 const CANCELABLE = new Set<Task['status']>(['pending', 'resolving', 'downloading'])
 
@@ -78,8 +85,14 @@ export default function TaskList({ tasks }: { tasks: Task[] }) {
                 )}
               </div>
               {(t.status === 'downloading' || t.status === 'done') && (
-                <div className={`progressbar ${t.status === 'done' ? 'done' : ''}`}>
-                  <div className="fill" style={{ width: `${Math.max(t.progress, 3)}%` }} />
+                <div
+                  className={`progressbar ${t.status === 'done' ? 'done' : 'downloading'}`}
+                  role="progressbar"
+                  aria-valuenow={Math.round(t.progress)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                >
+                  <div className="fill" style={{ width: `${Math.max(t.progress, 2)}%` }} />
                 </div>
               )}
               {t.status === 'resolving' && (
@@ -90,8 +103,10 @@ export default function TaskList({ tasks }: { tasks: Task[] }) {
               <div className="meta">
                 {t.status === 'downloading' && (
                   <span>
-                    段 {t.segDone.toLocaleString()}/{t.segTotal.toLocaleString()} · {t.progress.toFixed(1)}%
+                    {t.segTotal > 0 ? `${Math.round(t.progress)}% · ` : ''}
+                    {fmtSize(t.bytesDone)}
                     {fmtSpeed(t.speedBps) ? ` · ${fmtSpeed(t.speedBps)}` : ''}
+                    {t.segTotal > 0 ? ` · 段 ${t.segDone.toLocaleString()}/${t.segTotal.toLocaleString()}` : ''}
                     {t.authorUid ? ` · 作者 ${t.authorName || t.authorUid}` : ''}
                   </span>
                 )}

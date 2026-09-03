@@ -211,10 +211,35 @@ func (d *Downloader) Download(m3u8URL, outMP4 string, opt Options) error {
 	var wg sync.WaitGroup
 
 	start := time.Now()
-	// 段下载速度采样（供进度回调估算瞬时速率）：最近窗口的 (时间, 字节) 快照
+	// 进度回调节流：时间驱动（约 200ms 一次）+ 段计数兜底，取代旧的每 50 段一跳
+	// （段大小不一，50 段的间隔忽快忽慢，进度条看起来一顿一顿）
+	var lastEmit atomic.Int64 // 上次回调的 unix 毫秒
+	lastEmit.Store(start.UnixMilli())
+	// 速率平滑：短窗口字节差 / 时间差（窗口约 1.2s，每次回调滚动重置）
 	var sampleT atomic.Int64 // unix 毫秒
 	var sampleB atomic.Int64
 	sampleT.Store(start.UnixMilli())
+
+	emitProgress := func() {
+		if opt.OnProgress == nil {
+			return
+		}
+		n := done.Load()
+		if n == 0 && total > 0 {
+			return // 尚无完成段：跳过（速度无意义、进度 0）
+		}
+		b := bytesDL.Load()
+		prevT, prevB := sampleT.Load(), sampleB.Load()
+		nowT := time.Now().UnixMilli()
+		dt := float64(nowT-prevT) / 1000
+		speed := 0.0
+		if dt > 0.15 {
+			speed = float64(b-prevB) / dt
+			sampleT.Store(nowT)
+			sampleB.Store(b)
+		}
+		opt.OnProgress(Progress{Done: int(n), Total: total, Bytes: b, SpeedBps: speed})
+	}
 
 	setErr := func(err error) {
 		errMu.Lock()
@@ -257,20 +282,16 @@ func (d *Downloader) Download(m3u8URL, outMP4 string, opt Options) error {
 				return
 			}
 			buf[idx] = data
-			n := done.Add(1)
-			b := bytesDL.Add(int64(len(data)))
-			if opt.OnProgress != nil && (n%50 == 0 || n == int64(total)) {
-				// 用上一个采样点到现在的字节差估算瞬时速率
-				prevT, prevB := sampleT.Load(), sampleB.Load()
-				nowT := time.Now().UnixMilli()
-				dt := float64(nowT-prevT) / 1000
-				speed := 0.0
-				if dt > 0.3 {
-					speed = float64(b-prevB) / dt
-					sampleT.Store(nowT)
-					sampleB.Store(b)
+			done.Add(1)
+			bytesDL.Add(int64(len(data)))
+			// 时间驱动节流：距上次回调 ≥200ms 时发一次（最后一段强制发）
+			n := done.Load()
+			last := lastEmit.Load()
+			now := time.Now().UnixMilli()
+			if now-last >= 200 || n == int64(total) {
+				if lastEmit.CompareAndSwap(last, now) {
+					emitProgress()
 				}
-				opt.OnProgress(Progress{Done: int(n), Total: total, Bytes: b, SpeedBps: speed})
 			}
 		}(i, name)
 	}

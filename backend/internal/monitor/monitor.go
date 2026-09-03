@@ -580,6 +580,9 @@ func (m *Monitor) checkAuthor(a config.AuthorConfig) {
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
+	// 下载顺序：发布时间升序（最旧先下）——与列表展示（最新在前）相反，
+	// 用户看进度时视频按时间线从头追更
+	site.SortByTimeAsc(verifiedNew)
 	for _, id := range recheck {
 		m.mu.Lock()
 		rec, exist := m.state.Discovered[id]
@@ -979,9 +982,15 @@ func (m *Monitor) ClearDownloaded(ids []int64) int {
 
 // EnqueueManual 将发现记录加入下载队列；返回实际入队数量。
 // 已下载的跳过；排队/下载中的跳过；失败/跳过/已取消的重置为待下载（重试）。
+// 入队顺序：按帖子发布时间升序（最旧先下，与自动下载一致）。
 func (m *Monitor) EnqueueManual(ids []int64) int {
 	m.mu.Lock()
-	enqueued := 0
+	// 先按发布时间升序整理待入队列表
+	type enqueueItem struct {
+		id  int64
+		rec DiscoveredRecord
+	}
+	var items []enqueueItem
 	for _, id := range ids {
 		if _, done := m.state.Topics[id]; done {
 			continue
@@ -990,6 +999,17 @@ func (m *Monitor) EnqueueManual(ids []int64) int {
 		if !ok {
 			continue
 		}
+		items = append(items, enqueueItem{id: id, rec: rec})
+	}
+	for i := 1; i < len(items); i++ {
+		for j := i; j > 0 && items[j].rec.CreateTime < items[j-1].rec.CreateTime; j-- {
+			items[j], items[j-1] = items[j-1], items[j]
+		}
+	}
+
+	enqueued := 0
+	for _, it := range items {
+		id, rec := it.id, it.rec
 		if t, queued := m.tasks[id]; queued {
 			if t.Status == StatusPending || t.Status == StatusResolving || t.Status == StatusDownloading {
 				continue

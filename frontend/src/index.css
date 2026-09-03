@@ -509,16 +509,41 @@ input, select, textarea { font-family: inherit; }
   height: 100%;
   border-radius: 4px;
   background: linear-gradient(90deg, #3b82f6, var(--accent));
-  transition: width 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+  /* 数据更新间隔之间平滑插值（后端约 200ms 一推、前端 1s 轮询） */
+  transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1);
 }
+/* 下载中的流光效果：缓慢移动的高光，让"在动"的感觉连续可见 */
+.progressbar .fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+  transform: translateX(-100%);
+  animation: fill-shine 1.4s ease-in-out infinite;
+}
+@keyframes fill-shine {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+/* 完成态：绿色 + 无流光 */
 .progressbar.done .fill { background: linear-gradient(90deg, #22a35c, #16a34a); }
+.progressbar.done .fill::after { animation: none; opacity: 0; }
 
-/* 解析中：不定进度 */
+/* 解析中：不定进度（重写为 transform 动画，旧 margin 版有性能与边缘裁剪问题） */
 .progressbar.indeterminate .fill {
   width: 34% !important;
   animation: slide 1.2s ease-in-out infinite alternate;
 }
 @keyframes slide { from { margin-left: 0; } to { margin-left: 66%; } }
+/* 解析中同样加流光 */
+.progressbar.indeterminate .fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+  transform: translateX(-100%);
+  animation: fill-shine 1.4s ease-in-out infinite;
+}
 
 /* ============================================================
    视频库（网格卡片）

@@ -230,6 +230,15 @@ func sortTopicsByTime(topics []Topic) {
 	}
 }
 
+// SortByTimeAsc 按 createTime 升序（最旧在前）：下载入队顺序用（追更从最早看起）。
+func SortByTimeAsc(topics []Topic) {
+	for i := 1; i < len(topics); i++ {
+		for j := i; j > 0 && topics[j].CreateTime < topics[j-1].CreateTime; j-- {
+			topics[j], topics[j-1] = topics[j-1], topics[j]
+		}
+	}
+}
+
 // AuthorInfo 取作者昵称与帖子总数（列表首页第一条的 user.nickname）。
 func (c *Client) AuthorInfo(uid int64) (nickname string, total int, err error) {
 	q := url.Values{}
