@@ -883,6 +883,63 @@ select.input { cursor: pointer; }
 .author-card-row.off .a-last { opacity: 0.45; }
 .author-card-row .btn.icon-only { padding: 6px; }
 
+/* 作者行删除操作组 */
+.a-actions { display: flex; gap: 7px; flex-shrink: 0; }
+.author-card-row .a-actions .btn { padding: 6px 13px; font-size: 11.5px; border-radius: var(--r-sm); }
+
+/* 检查中的作者：名字旁徽标 + 旋转点 */
+.a-checking {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 9px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 10.5px;
+  font-weight: 600;
+  vertical-align: middle;
+  max-width: 260px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.a-checking .spin-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--warn);
+  border-top-color: transparent;
+  animation: rotate 0.8s linear infinite;
+  flex-shrink: 0;
+}
+.a-progress-hint { color: var(--warn); }
+
+/* 删除作者对话框 */
+.remove-box { width: min(440px, 100%); }
+.remove-body { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.remove-tip { font-size: 12px; color: var(--text-2); line-height: 1.7; }
+.remove-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 10px;
+  row-gap: 2px;
+  align-items: center;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.remove-option:hover { border-color: var(--border-strong); background: var(--surface-2); }
+.remove-option:has(input:checked) { border-color: rgba(37, 99, 235, 0.4); background: var(--accent-dim); }
+.remove-option input { width: 17px; height: 17px; accent-color: var(--accent); grid-row: span 2; }
+.remove-option .opt-main { font-size: 12.5px; font-weight: 600; color: var(--text-1); }
+.remove-option .opt-sub { font-size: 11px; color: var(--text-3); line-height: 1.5; }
+.remove-warn { font-size: 11.5px; color: var(--warn); line-height: 1.6; min-height: 1.2em; }
+.remove-foot { justify-content: flex-end; gap: 9px; display: flex; padding-top: 0; }
+
 /* ffmpeg 缺失提示横幅 */
 .ff-banner {
   display: flex;
@@ -1309,6 +1366,7 @@ select.input { cursor: pointer; }
   .author-card-row { flex-wrap: wrap; }
   .author-card-row .a-main { flex-basis: 100%; }
   .author-card-row .a-stats { flex-wrap: wrap; }
+  .author-card-row .a-actions { margin-left: auto; }
   /* 播放弹窗：贴边满宽，视频 48dvh，底部安全区不被 Home 条遮挡 */
   .modal-box video { max-height: 48dvh; }
   .modal-overlay { padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }

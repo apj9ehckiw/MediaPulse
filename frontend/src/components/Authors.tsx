@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { addAuthorRemote, removeAuthorRemote, setAuthorEnabled, Snapshot } from '../api'
+import { addAuthorRemote, removeAuthorRemote, setAuthorEnabled, AuthorStat, Snapshot } from '../api'
 import { IconClose, IconPlus, IconUsers } from '../icons'
 import { EmptyState } from './common'
 
@@ -14,6 +14,7 @@ export default function Authors({ snapshot, onRefresh }: Props) {
   const [busy, setBusy] = useState(false)
   const [busyUid, setBusyUid] = useState<number | null>(null)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [removing, setRemoving] = useState<AuthorStat | null>(null)
 
   const submit = async () => {
     const uid = Number(uidText.trim())
@@ -41,21 +42,6 @@ export default function Authors({ snapshot, onRefresh }: Props) {
     try {
       await setAuthorEnabled(uid, enabled)
       setMsg({ ok: true, text: `已${enabled ? '开启' : '关闭'}作者 ${uid} 的监控` })
-      onRefresh()
-    } catch (e) {
-      setMsg({ ok: false, text: String(e) })
-    } finally {
-      setBusyUid(null)
-    }
-  }
-
-  const remove = async (uid: number, name: string) => {
-    if (!window.confirm(`确定删除作者「${name || uid}」吗？已下载的视频会保留在视频库。`)) return
-    setBusyUid(uid)
-    setMsg(null)
-    try {
-      await removeAuthorRemote(uid)
-      setMsg({ ok: true, text: `已删除作者 ${name || uid}` })
       onRefresh()
     } catch (e) {
       setMsg({ ok: false, text: String(e) })
@@ -96,7 +82,7 @@ export default function Authors({ snapshot, onRefresh }: Props) {
             </div>
           )}
           <div className="hint">
-            只需填写作者 UID，名字会从站点自动获取。添加后立即触发一次全量检查，
+            只需填写作者 UID，名字会从站点自动获取。添加后立即增量检查该作者，
             新发现的视频进入「发现」页等待手动下载。
           </div>
         </div>
@@ -121,7 +107,15 @@ export default function Authors({ snapshot, onRefresh }: Props) {
             {authors.map((a) => (
               <div className={`author-card-row ${a.enabled ? '' : 'off'}`} key={a.uid}>
                 <div className="a-main">
-                  <div className="a-name">{a.note || `作者 ${a.uid}`}</div>
+                  <div className="a-name">
+                    {a.note || `作者 ${a.uid}`}
+                    {a.checking && (
+                      <span className="a-checking" title={a.checkInfo}>
+                        <span className="spin-dot" />
+                        {a.checkInfo || '检测中'}
+                      </span>
+                    )}
+                  </div>
                   <div className="a-uid">UID {a.uid}</div>
                 </div>
                 <label className="switch-label" title={a.enabled ? '点击停止监控该作者' : '点击开始监控该作者'}>
@@ -139,26 +133,120 @@ export default function Authors({ snapshot, onRefresh }: Props) {
                   <span className={a.pending > 0 ? 'a-pending' : ''}>待处理 <b>{a.pending}</b></span>
                 </div>
                 <div className="a-last">
-                  {a.lastCheck ? `检查于 ${a.lastCheck}` : '尚未检查'}
+                  {a.checking ? (
+                    <span className="a-progress-hint">{a.checkInfo}</span>
+                  ) : a.lastCheck ? `检查于 ${a.lastCheck}` : '尚未检查'}
                 </div>
-                <button
-                  className="btn ghost icon-only danger-ghost"
-                  onClick={() => remove(a.uid, a.note)}
-                  disabled={busyUid === a.uid}
-                  title="删除作者"
-                  aria-label={`删除作者 ${a.note || a.uid}`}
-                >
-                  <IconClose size={13} />
-                </button>
+                <div className="a-actions">
+                  <button
+                    className="btn ghost danger-ghost remove-wipe"
+                    onClick={() => setRemoving(a)}
+                    disabled={busyUid === a.uid}
+                    title="删除作者（可选同时删除视频与记录）"
+                  >
+                    删除
+                  </button>
+                </div>
               </div>
             ))}
             <div className="hint" style={{ padding: '10px 16px' }}>
               「待处理」= 检测到但尚未成功下载的视频帖（含下载失败可重试的），
               与「已下载」相加即为该作者当前检测到的全部视频帖。
-              停用后不再检查该作者，删除不影响已下载的视频。
+              删除作者时可选择是否同时删除其视频文件与相关记录。
             </div>
           </div>
         )}
+      </div>
+
+      {removing && (
+        <RemoveDialog
+          author={removing}
+          onClose={() => setRemoving(null)}
+          onDone={(text) => {
+            setRemoving(null)
+            setMsg({ ok: true, text })
+            onRefresh()
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+/** 删除作者对话框：复选框选择是否连带删除视频/记录 */
+function RemoveDialog({ author, onClose, onDone }: {
+  author: AuthorStat
+  onClose: () => void
+  onDone: (msg: string) => void
+}) {
+  const [delVideos, setDelVideos] = useState(false)
+  const [delRecords, setDelRecords] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const confirm = async () => {
+    if (busy) return
+    setBusy(true)
+    setErr('')
+    try {
+      await removeAuthorRemote(author.uid, delVideos, delRecords)
+      onDone(delVideos || delRecords
+        ? `已删除作者 ${author.note || author.uid}${delVideos ? ' 及其视频文件' : ''}${delRecords ? ' 及相关记录' : ''}`
+        : `已删除作者 ${author.note || author.uid}（视频与记录保留）`)
+    } catch (e) {
+      setErr(String(e))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={busy ? undefined : onClose}>
+      <div className="modal-box remove-box" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <span className="t">删除作者「{author.note || author.uid}」</span>
+          <button className="btn ghost icon-only" onClick={onClose} disabled={busy} title="关闭">
+            <IconClose size={14} />
+          </button>
+        </div>
+        <div className="remove-body">
+          <div className="remove-tip">
+            从监控列表移除该作者（UID {author.uid}）。
+            已下载 <b>{author.downloaded}</b> 个视频 · 待处理 <b>{author.pending}</b> 条。
+          </div>
+          <label className="remove-option">
+            <input
+              type="checkbox"
+              checked={delVideos}
+              onChange={(e) => setDelVideos(e.target.checked)}
+            />
+            <span className="opt-main">同时删除视频文件</span>
+            <span className="opt-sub">videos/ 下该作者的整个文件夹（不可恢复）</span>
+          </label>
+          <label className="remove-option">
+            <input
+              type="checkbox"
+              checked={delRecords}
+              onChange={(e) => setDelRecords(e.target.checked)}
+            />
+            <span className="opt-main">同时删除相关记录</span>
+            <span className="opt-sub">下载去重 + 发现记录 + 下载流水，并取消进行中的任务；重新添加后会重新发现并下载</span>
+          </label>
+          <div className="remove-warn">
+            {(delVideos || delRecords) && '⚠ 勾选的删除操作不可恢复，请确认。'}
+            {!delVideos && !delRecords && '未勾选任何选项：仅从列表移除，之后重新添加同 UID 可继续。'}
+          </div>
+          {err && <div className="add-msg err" role="alert">{err}</div>}
+        </div>
+        <div className="modal-foot remove-foot">
+          <button className="btn ghost" onClick={onClose} disabled={busy}>取消</button>
+          <button
+            className={`btn ${(delVideos || delRecords) ? 'primary' : 'ghost'}`}
+            onClick={confirm}
+            disabled={busy}
+          >
+            {busy ? '删除中...' : '确认删除'}
+          </button>
+        </div>
       </div>
     </div>
   )

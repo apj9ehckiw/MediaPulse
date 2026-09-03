@@ -114,6 +114,9 @@ type AuthorStat struct {
 	Videos     int    `json:"videos"`  // 检测到的视频帖总数（含已下载与待处理）
 	Pending    int    `json:"pending"` // 待处理（发现未下载，含检查失败可重试的）
 	LastCheck  string `json:"lastCheck,omitempty"`
+	// 检查中状态（供作者页显示进度，用户能看到程序在工作）
+	Checking  bool   `json:"checking,omitempty"`  // 当前正在检查该作者
+	CheckInfo string `json:"checkInfo,omitempty"` // 阶段描述：拉列表 第X/Y页 / 核验附件 X/Y / ...
 }
 
 // Paths 监控器的文件路径。
@@ -143,6 +146,8 @@ type Monitor struct {
 	stopCh   chan struct{}
 	subs     []func(Event)
 	lastCheck map[int64]string
+	// 检查中的作者状态（作者页进度显示）：uid -> 阶段描述
+	checkingAuthors map[int64]string
 	// 任务取消信号：topicID -> cancel 函数（下载中/解析中的任务）
 	cancels map[int64]context.CancelFunc
 
@@ -161,6 +166,7 @@ func New(store *config.Store, paths Paths, hist *history.Store) *Monitor {
 		dlWake:    make(chan struct{}, 1),
 		stopCh:    make(chan struct{}),
 		lastCheck: map[int64]string{},
+		checkingAuthors: map[int64]string{},
 		cancels:   map[int64]context.CancelFunc{},
 		hist:      hist,
 	}
@@ -308,13 +314,18 @@ func (m *Monitor) Snapshot() Snapshot {
 	}
 	authors := make([]AuthorStat, 0, len(cfg.Authors))
 	for _, a := range cfg.Authors {
-		authors = append(authors, AuthorStat{
+		st := AuthorStat{
 			UID: a.UID, Note: a.Note, Enabled: a.Enabled,
 			Downloaded: counts[a.UID],
 			Videos:     videoCounts[a.UID],
 			Pending:    pendingCounts[a.UID],
 			LastCheck:  m.lastCheck[a.UID],
-		})
+		}
+		if info, checking := m.checkingAuthors[a.UID]; checking {
+			st.Checking = true
+			st.CheckInfo = info
+		}
+		authors = append(authors, st)
 	}
 	return Snapshot{
 		APIBase:         cfg.APIBase,
@@ -493,11 +504,26 @@ func (m *Monitor) checkAll() {
 	}
 }
 
-// checkAuthor 检查单个作者。
+// checkAuthor 检查单个作者。checkingAuthors 维护阶段进度供作者页显示。
 func (m *Monitor) checkAuthor(a config.AuthorConfig) {
 	name := m.authorName(a.UID)
+	setChecking := func(info string) {
+		m.mu.Lock()
+		m.checkingAuthors[a.UID] = info
+		m.mu.Unlock()
+	}
+	clearChecking := func() {
+		m.mu.Lock()
+		delete(m.checkingAuthors, a.UID)
+		m.mu.Unlock()
+	}
+	defer clearChecking()
+
+	setChecking("拉取帖子列表...")
 	m.emit("info", "拉取作者 %s 帖子列表...", name)
-	topics, err := m.client.ListTopics(a.UID, m.store.Get().ListType)
+	topics, err := m.client.ListTopics(a.UID, m.store.Get().ListType, func(page, got, total int) {
+		setChecking(fmt.Sprintf("拉列表 第 %d 页（已 %d/%d 帖）", page, got, total))
+	})
 	if err != nil {
 		m.emit("error", "作者 %s 列表拉取失败: %v", name, err)
 		return
@@ -578,12 +604,16 @@ func (m *Monitor) checkAuthor(a config.AuthorConfig) {
 	var todo []site.Topic
 	var verifiedNew []site.Topic
 	noVideo, reVerified := 0, 0
+	verifyTotal := len(newCandidates) + len(recheck)
+	verifyDone := 0
 	for _, t := range newCandidates {
+		setChecking(fmt.Sprintf("核验视频附件 %d/%d", verifyDone+1, verifyTotal))
 		if m.topicHasVideo(t.TopicID) {
 			verifiedNew = append(verifiedNew, t)
 		} else {
 			noVideo++
 		}
+		verifyDone++
 		time.Sleep(300 * time.Millisecond)
 	}
 	// 下载顺序：发布时间升序（最旧先下）——与列表展示（最新在前）相反，
@@ -594,8 +624,10 @@ func (m *Monitor) checkAuthor(a config.AuthorConfig) {
 		rec, exist := m.state.Discovered[id]
 		m.mu.Unlock()
 		if !exist {
+			verifyDone++
 			continue
 		}
+		setChecking(fmt.Sprintf("核验视频附件 %d/%d", verifyDone+1, verifyTotal))
 		if !m.topicHasVideo(id) {
 			m.mu.Lock()
 			delete(m.state.Discovered, id)
@@ -610,6 +642,7 @@ func (m *Monitor) checkAuthor(a config.AuthorConfig) {
 			m.mu.Unlock()
 			reVerified++
 		}
+		verifyDone++
 		time.Sleep(300 * time.Millisecond)
 	}
 
@@ -942,8 +975,11 @@ func (m *Monitor) SetAuthorEnabled(uid int64, enabled bool) (config.AuthorConfig
 	return config.AuthorConfig{}, fmt.Errorf("作者 %d 不存在", uid)
 }
 
-// RemoveAuthor 删除作者（不删除已下载的视频与发现记录）。
-func (m *Monitor) RemoveAuthor(uid int64) error {
+// RemoveAuthor 删除作者。
+// deleteVideos=true：删除该作者的视频文件（videos/<作者名>/ 整个目录）；
+// deleteRecords=true：删除下载去重记录、发现记录、下载流水。
+// 两者独立可选（网页端复选框）；记录删除时同时取消该作者进行中的任务。
+func (m *Monitor) RemoveAuthor(uid int64, deleteVideos, deleteRecords bool) error {
 	cfg := m.store.Get()
 	out := cfg.Authors[:0]
 	found := false
@@ -961,8 +997,111 @@ func (m *Monitor) RemoveAuthor(uid int64) error {
 	if _, err := m.store.Update(cfg); err != nil {
 		return err
 	}
-	m.emit("info", "已删除作者 %s（已下载的视频保留在视频库）", m.authorName(uid))
+
+	name := m.authorName(uid)
+	if !deleteVideos && !deleteRecords {
+		m.emit("info", "已删除作者 %s（视频与记录全部保留）", name)
+		return nil
+	}
+
+	// 连带清理：收集该作者的帖子 ID 与文件路径
+	m.mu.Lock()
+	var files []string
+	var ids []int64
+	if deleteRecords {
+		for tid, rec := range m.state.Topics {
+			if rec.AuthorUID == uid {
+				ids = append(ids, tid)
+				if rec.File != "" {
+					files = append(files, rec.File)
+				}
+			}
+		}
+		for tid, rec := range m.state.Discovered {
+			if rec.AuthorUID == uid {
+				ids = append(ids, tid)
+				delete(m.state.Discovered, tid)
+			}
+		}
+		for _, tid := range ids {
+			delete(m.state.Topics, tid)
+		}
+	} else {
+		// 仅删视频：也要按已下载记录找到对应文件
+		for _, rec := range m.state.Topics {
+			if rec.AuthorUID == uid && rec.File != "" {
+				files = append(files, rec.File)
+			}
+		}
+	}
+	// 记录删除时取消该作者进行中的任务
+	var canceling []int64
+	if deleteRecords {
+		for tid, t := range m.tasks {
+			if t.AuthorUID == uid {
+				canceling = append(canceling, tid)
+			}
+		}
+	}
+	cancelFns := make([]context.CancelFunc, 0, len(canceling))
+	for _, tid := range canceling {
+		if fn, ok := m.cancels[tid]; ok {
+			cancelFns = append(cancelFns, fn)
+		}
+		// 从队列移除该作者的任务
+		delete(m.tasks, tid)
+	}
+	if deleteRecords {
+		nq := m.queue[:0]
+		for _, t := range m.queue {
+			if t.AuthorUID != uid {
+				nq = append(nq, t)
+			} else {
+				t.Status = StatusCanceled
+				t.Error = "作者已删除"
+			}
+		}
+		m.queue = nq
+	}
+	if deleteRecords {
+		m.saveState()
+	}
+	m.mu.Unlock()
+	for _, fn := range cancelFns {
+		fn()
+	}
+
+	// 删除视频文件与作者目录（deleteVideos）
+	removedFiles := 0
+	if deleteVideos {
+		for _, f := range files {
+			if err := os.Remove(filepath.Join(m.paths.OutDir, filepath.FromSlash(f))); err == nil {
+				removedFiles++
+			}
+		}
+		// 作者整个目录也清掉（包含未登记的视频等遗留）
+		_ = os.RemoveAll(filepath.Join(m.paths.OutDir, safeName(name, 40)))
+	}
+
+	// 删除下载流水（deleteRecords，按作者维度）
+	histRemoved := 0
+	if deleteRecords && m.hist != nil {
+		histRemoved = m.hist.RemoveByAuthor(uid)
+	}
+
+	m.emit("ok", "已删除作者 %s：%s%s%s",
+		name,
+		boolMark(deleteRecords, fmt.Sprintf("移除记录 %d 条", len(ids))),
+		boolMark(deleteVideos && removedFiles > 0, fmt.Sprintf("、视频文件 %d 个", removedFiles)),
+		boolMark(deleteRecords && histRemoved > 0, fmt.Sprintf("、下载流水 %d 条", histRemoved)))
 	return nil
+}
+
+func boolMark(b bool, s string) string {
+	if b {
+		return s
+	}
+	return ""
 }
 
 // ClearDownloaded 清除下载去重记录（state.json 的已下载帖子表），

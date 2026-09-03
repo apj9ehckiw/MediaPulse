@@ -37,6 +37,10 @@ export interface AuthorStat {
   videos: number
   pending: number
   lastCheck?: string
+  /** 该作者当前正在被检查 */
+  checking?: boolean
+  /** 检查阶段描述（拉列表 第X页 / 核验附件 X/Y） */
+  checkInfo?: string
 }
 
 export interface Snapshot {
@@ -253,11 +257,11 @@ export async function setAuthorEnabled(uid: number, enabled: boolean): Promise<{
   return r.json()
 }
 
-export async function removeAuthorRemote(uid: number): Promise<void> {
+export async function removeAuthorRemote(uid: number, deleteVideos = false, deleteRecords = false): Promise<void> {
   const r = await fetch('/api/authors/remove', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ uid }),
+    body: JSON.stringify({ uid, deleteVideos, deleteRecords }),
   })
   if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`)
 }

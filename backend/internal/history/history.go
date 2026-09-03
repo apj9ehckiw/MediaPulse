@@ -103,6 +103,54 @@ func (s *Store) Delete(topicID int64, status, at string) (Record, bool) {
 	return Record{}, false
 }
 
+// RemoveByTopics 删除指定帖子 ID 集合的全部记录（删除作者连带清理时用）并落盘。
+// 返回删除条数。
+func (s *Store) RemoveByTopics(topicIDs []int64) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(topicIDs) == 0 {
+		return 0
+	}
+	set := make(map[int64]struct{}, len(topicIDs))
+	for _, id := range topicIDs {
+		set[id] = struct{}{}
+	}
+	kept := make([]Record, 0, len(s.rows))
+	removed := 0
+	for _, r := range s.rows {
+		if _, ok := set[r.TopicID]; ok {
+			removed++
+			continue
+		}
+		kept = append(kept, r)
+	}
+	if removed > 0 {
+		s.rows = kept
+		s.persist()
+	}
+	return removed
+}
+
+// RemoveByAuthor 删除指定作者的全部记录并落盘。返回删除条数。
+func (s *Store) RemoveByAuthor(uid int64) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := make([]Record, 0, len(s.rows))
+	removed := 0
+	for _, r := range s.rows {
+		if r.AuthorUID == uid {
+			removed++
+			continue
+		}
+		kept = append(kept, r)
+	}
+	if removed > 0 {
+		s.rows = kept
+		s.persist()
+	}
+	return removed
+}
+
 // persist 落盘（调用方需持锁）。
 func (s *Store) persist() {
 	data, err := json.MarshalIndent(s.rows, "", " ")

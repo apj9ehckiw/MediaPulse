@@ -846,15 +846,18 @@ func (s *Server) handleAuthorEnable(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAuthorRemove 删除作者。
+// deleteVideos：连带删除该作者的视频文件；deleteRecords：连带删除全部相关记录。
 func (s *Server) handleAuthorRemove(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		UID int64 `json:"uid"`
+		UID           int64 `json:"uid"`
+		DeleteVideos  bool  `json:"deleteVideos"`
+		DeleteRecords bool  `json:"deleteRecords"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.mon.RemoveAuthor(req.UID); err != nil {
+	if err := s.mon.RemoveAuthor(req.UID, req.DeleteVideos, req.DeleteRecords); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

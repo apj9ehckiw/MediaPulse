@@ -191,7 +191,8 @@ func decodeEnvelope(resp *http.Response) (json.RawMessage, error) {
 
 // ListTopics 拉取作者全部帖子并按 createTime 降序（最新在前）。
 // type: 0=全部 1=最新 3=精华（对应站内路由 /homepage/last/:uid 等）。
-func (c *Client) ListTopics(uid int64, listType int) ([]Topic, error) {
+// onPage 每页拉取后回调（可空）：page, 累计条数, 总条数。
+func (c *Client) ListTopics(uid int64, listType int, onPage func(page, got, total int)) ([]Topic, error) {
 	var all []Topic
 	for page := 1; ; page++ {
 		q := url.Values{}
@@ -212,6 +213,9 @@ func (c *Client) ListTopics(uid int64, listType int) ([]Topic, error) {
 			break
 		}
 		all = append(all, lr.Results...)
+		if onPage != nil {
+			onPage(page, len(all), lr.Page.Total)
+		}
 		if len(all) >= lr.Page.Total || page > 200 {
 			break
 		}
