@@ -993,11 +993,15 @@ select.input { cursor: pointer; }
 .hint-inline { font-size: 11px; color: var(--text-4); white-space: nowrap; }
 .save-row {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 12px;
   border-top: 1px solid var(--border);
   margin-top: 4px;
   padding-top: 14px;
 }
+/* 保存结果提示（按钮右侧） */
+.save-row .save-result { font-size: 12px; }
 
 /* ============================================================
    作者筛选按钮 + 独立悬浮窗（发现页多选）

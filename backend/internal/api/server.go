@@ -608,27 +608,22 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	// ffmpeg 自动安装开关即时生效（下次检测/启动时应用）
 	ffmpeg.SetAutoInstall(updated.FFmpegAutoInstall)
 	ffmpeg.SetGitHubProxy(updated.GitHubProxy)
-	// 密码变更后作废所有旧会话
+	// 密码变更后作废全部旧会话
 	if updated.Password != old.Password {
 		s.dropAllSessions()
 	}
-	// 配置生效：新增了作者时只增量检查新作者（不重查全部）；
-	// 其他配置变更（基址/自动下载等）才触发全量检查
-	if len(updated.Authors) > len(old.Authors) {
-		for _, na := range updated.Authors {
-			newAuthor := true
-			for _, oa := range old.Authors {
-				if oa.UID == na.UID {
-					newAuthor = false
-					break
-				}
-			}
-			if newAuthor {
-				s.mon.CheckAuthorAsync(na)
+	// 保存配置不再触发检查；仅当新增了作者时增量检查新作者（其余作者不受影响）
+	for _, na := range updated.Authors {
+		newAuthor := true
+		for _, oa := range old.Authors {
+			if oa.UID == na.UID {
+				newAuthor = false
+				break
 			}
 		}
-	} else {
-		s.mon.TriggerCheck()
+		if newAuthor {
+			s.mon.CheckAuthorAsync(na)
+		}
 	}
 	has := updated.Password != ""
 	authOff := updated.AuthDisabled

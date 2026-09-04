@@ -18,6 +18,7 @@ export default function Settings({ onSaved }: Props) {
   const [cfg, setCfg] = useState<AppConfig | null>(null)
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
+  const [savedMsg, setSavedMsg] = useState('')
   const [ff, setFf] = useState<FFmpegStatus | null>(null)
   const [ffBusy, setFfBusy] = useState(false)
 
@@ -68,10 +69,25 @@ export default function Settings({ onSaved }: Props) {
   const save = async () => {
     setSaving(true)
     setErr('')
+    setSavedMsg('')
+    const before = cfg // 提交前的表单值（对比基准）
     try {
       const saved = await updateConfig(cfg)
       setCfg(saved)
-      onSaved(`配置已保存：间隔 ${saved.intervalSec}s，并发 ${saved.workers}`)
+      // 保存结果明细：列出与提交前相比实际变化的项（saved 可能被后端规范化）
+      const changes: string[] = []
+      if (saved.intervalSec !== before?.intervalSec) changes.push(`间隔 ${saved.intervalSec}s`)
+      if (saved.workers !== before?.workers) changes.push(`并发 ${saved.workers}`)
+      if (saved.autoDownload !== before?.autoDownload) changes.push(`自动下载${saved.autoDownload ? '开启' : '关闭'}`)
+      if (saved.autoDownloadAfter !== before?.autoDownloadAfter) changes.push(`自动下载时间下限 ${saved.autoDownloadAfter || '不限'}`)
+      if (saved.apiBase !== before?.apiBase) changes.push('站点基址')
+      if (saved.githubProxy !== before?.githubProxy) changes.push(`GitHub 代理 ${saved.githubProxy || '停用'}`)
+      if (saved.ffmpegAutoInstall !== before?.ffmpegAutoInstall) changes.push(`ffmpeg 自动安装${saved.ffmpegAutoInstall ? '开启' : '关闭'}`)
+      if ((saved.password ?? '') !== '') changes.push('访问密码已更新')
+      const detail = changes.length > 0 ? changes.join(' · ') : '设置未变化'
+      const text = `配置已保存：${detail}`
+      setSavedMsg(text)
+      onSaved(text)
     } catch (e) {
       setErr(String(e))
     } finally {
@@ -291,9 +307,13 @@ export default function Settings({ onSaved }: Props) {
             <button className="btn primary" onClick={save} disabled={saving}>
               {saving ? '保存中...' : '保存配置'}
             </button>
+            {savedMsg && (
+              <span className="add-msg ok save-result" role="status">{savedMsg}</span>
+            )}
           </div>
           <div className="hint">
             监控哪些作者在左侧「作者」页管理：添加、启用/停用、删除。
+            保存配置不会触发作者检查；新作者在「作者」页添加时自动增量检查。
           </div>
         </div>
       </div>
