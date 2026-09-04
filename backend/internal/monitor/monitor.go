@@ -82,6 +82,9 @@ type DiscoveredRecord struct {
 type persistedState struct {
 	Topics     map[int64]DownloadedRecord `json:"topics"`
 	Discovered map[int64]DiscoveredRecord `json:"discovered,omitempty"`
+	// 每作者最近一次完成检查的时间（"2006-01-02 15:04:05"），重启后恢复：
+	// 启动扫描只查到期（lastCheck+interval 已过）的作者，避免每次重启全量重扫
+	LastChecks map[int64]string `json:"lastChecks,omitempty"`
 }
 
 // Snapshot 当前状态快照（API 用）。
@@ -178,12 +181,14 @@ func New(store *config.Store, paths Paths, hist *history.Store) *Monitor {
 	return m
 }
 
-// Run 启动监控循环（含启动即检查一次）与下载队列。
+// Run 启动监控循环与下载队列。
+// 启动扫描只查「到期」作者（距上次完成检查 ≥ 轮询间隔，或从未检查），
+// 全部未到期则跳过，等 ticker 到点再查——避免每次重启全量重扫。
 func (m *Monitor) Run() {
 	m.migrateToAuthorFolders()
 	m.running = true
 	go func() {
-		m.checkAll()
+		m.checkDue()
 		ticker := time.NewTicker(pollInterval(m.store))
 		defer ticker.Stop()
 		for {
@@ -245,7 +250,14 @@ func (m *Monitor) loadState() {
 		if st.Discovered == nil {
 			st.Discovered = map[int64]DiscoveredRecord{}
 		}
+		if st.LastChecks == nil {
+			st.LastChecks = map[int64]string{}
+		}
 		m.state = st
+		// 恢复每作者最近检查时间（内存 lastCheck），启动扫描据此判断是否到期
+		for uid, ts := range st.LastChecks {
+			m.lastCheck[uid] = ts
+		}
 	}
 }
 
@@ -455,6 +467,80 @@ func safeName(s string, maxLen int) string {
 	return s
 }
 
+// authorDue 作者是否检查到期：从未检查过，或距上次完成检查 ≥ 轮询间隔。
+func (m *Monitor) authorDue(a config.AuthorConfig) bool {
+	m.mu.Lock()
+	last, ok := m.lastCheck[a.UID]
+	m.mu.Unlock()
+	if !ok || last == "" {
+		return true
+	}
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", last, time.Local)
+	if err != nil {
+		return true
+	}
+	interval := time.Duration(m.store.Get().Interval) * time.Second
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	return time.Since(t) >= interval
+}
+
+// checkDue 启动时的到期扫描：只查到期作者；全部未到期则跳过（日志说明）。
+func (m *Monitor) checkDue() {
+	m.mu.Lock()
+	if m.checking {
+		m.mu.Unlock()
+		return
+	}
+	m.checking = true
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.checking = false
+		m.mu.Unlock()
+	}()
+
+	cfg := m.store.Get()
+	if m.client.Base != cfg.APIBase {
+		m.mu.Lock()
+		m.client = site.New(cfg.APIBase)
+		m.mu.Unlock()
+	}
+	m.mu.Lock()
+	m.dl = downloader.New(m.client, cfg.Workers)
+	m.mu.Unlock()
+
+	var due, skipped []config.AuthorConfig
+	for _, a := range cfg.Authors {
+		if !a.Enabled {
+			continue
+		}
+		if m.authorDue(a) {
+			due = append(due, a)
+		} else {
+			skipped = append(skipped, a)
+		}
+	}
+	if len(due) == 0 {
+		m.emit("info", "启动检查：所有 %d 个作者近期已检查过（距上次不足轮询间隔），跳过重扫", len(skipped))
+		return
+	}
+	if len(skipped) > 0 {
+		m.emit("info", "启动检查：%d 个作者近期已检查过，跳过；检查到期作者 %d 个", len(skipped), len(due))
+	}
+	m.mu.Lock()
+	m.checkTotal = len(due)
+	m.checkDone = 0
+	m.mu.Unlock()
+	for _, a := range due {
+		m.checkAuthor(a)
+		m.mu.Lock()
+		m.checkDone++
+		m.mu.Unlock()
+	}
+}
+
 // checkAll 逐个作者拉列表、筛新帖、逐个下载。
 func (m *Monitor) checkAll() {
 	m.mu.Lock()
@@ -533,6 +619,8 @@ func (m *Monitor) checkAuthor(a config.AuthorConfig) {
 	}
 	m.mu.Lock()
 	m.lastCheck[a.UID] = time.Now().Format("2006-01-02 15:04:05")
+	m.state.LastChecks[a.UID] = m.lastCheck[a.UID] // 落盘：重启后启动扫描据此跳过
+	m.saveState()
 	m.mu.Unlock()
 	// 备注为空时用列表自带的 nickname 自动补全（不覆盖用户设置的备注）
 	if nick := authorNickname(topics); nick != "" {
@@ -999,6 +1087,11 @@ func (m *Monitor) RemoveAuthor(uid int64, deleteVideos, deleteRecords bool) erro
 	}
 
 	name := m.authorName(uid)
+	// 清理检查记录（删除记录时；仅删视频/仅删作者时保留，重新添加同 UID 不受影响）
+	m.mu.Lock()
+	delete(m.lastCheck, uid)
+	delete(m.state.LastChecks, uid)
+	m.mu.Unlock()
 	if !deleteVideos && !deleteRecords {
 		m.emit("info", "已删除作者 %s（视频与记录全部保留）", name)
 		return nil
