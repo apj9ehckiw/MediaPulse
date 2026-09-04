@@ -10,7 +10,7 @@ const LEVEL_TAG: Record<string, string> = {
   dim: 'DBG ',
 }
 
-export default function EventLog({ events }: { events: Event[] }) {
+export default function EventLog({ events, fullPage = false }: { events: Event[]; fullPage?: boolean }) {
   const boxRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -18,7 +18,7 @@ export default function EventLog({ events }: { events: Event[] }) {
   }, [events])
 
   return (
-    <div className="card log-card">
+    <div className={`card log-card ${fullPage ? 'log-fullpage' : ''}`}>
       <div className="card-head">
         <h3>
           <span className="h-icon"><IconClock size={14} /></span>

@@ -10,9 +10,9 @@ import {
   videoFileURL,
   AuthMode,
 } from './api'
-import { IconClose, IconDashboard, IconDownload, IconGlobe, IconHistory, IconLogout, IconRefresh, IconSettings, IconSearch, IconUsers, IconVideo, IconPlus } from './icons'
+import { IconClose, IconClock, IconDashboard, IconDownload, IconGlobe, IconHistory, IconLogout, IconRefresh, IconSettings, IconSearch, IconUsers, IconVideo, IconPlus } from './icons'
 import StatsCards from './components/StatsCards'
-import TaskList from './components/TaskList'
+import TasksPage from './components/TasksPage'
 import VideoLibrary from './components/VideoLibrary'
 import EventLog from './components/EventLog'
 import Settings from './components/Settings'
@@ -23,26 +23,31 @@ import TopicDownload from './components/TopicDownload'
 import Login from './components/Login'
 import Setup from './components/Setup'
 import { EmptyState } from './components/common'
+import { Task } from './api'
 
-type Tab = 'dashboard' | 'library' | 'discovered' | 'authors' | 'downloads' | 'custom' | 'settings'
+type Tab = 'dashboard' | 'library' | 'tasks' | 'discovered' | 'authors' | 'downloads' | 'custom' | 'logs' | 'settings'
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'dashboard', label: '概览', icon: <IconDashboard size={16} /> },
   { key: 'library', label: '视频库', icon: <IconVideo size={16} /> },
+  { key: 'tasks', label: '任务', icon: <IconHistory size={16} /> },
   { key: 'discovered', label: '发现', icon: <IconSearch size={16} /> },
   { key: 'authors', label: '作者', icon: <IconUsers size={16} /> },
-  { key: 'downloads', label: '下载记录', icon: <IconHistory size={16} /> },
+  { key: 'downloads', label: '下载记录', icon: <IconDownload size={16} /> },
   { key: 'custom', label: '自定义下载', icon: <IconPlus size={16} /> },
+  { key: 'logs', label: '日志', icon: <IconClock size={16} /> },
   { key: 'settings', label: '设置', icon: <IconSettings size={16} /> },
 ]
 
 const TAB_META: Record<Tab, { title: string; crumb: string }> = {
-  dashboard: { title: '概览', crumb: '监控状态 · 任务 · 实时日志' },
+  dashboard: { title: '概览', crumb: '监控状态 · 进行中下载 · 最近动态' },
   library: { title: '视频库', crumb: '已下载视频 · 点击播放' },
+  tasks: { title: '任务', crumb: '进行中与已结束的下载任务' },
   discovered: { title: '发现', crumb: '检查到的新视频 · 按时间筛选手动下载' },
   authors: { title: '作者', crumb: '添加 · 开关 · 删除作者 · 检查状态' },
   downloads: { title: '下载记录', crumb: '每次下载的流水明细' },
   custom: { title: '自定义下载', crumb: '输入帖子 URL / ID 直接下载 · 支持批量' },
+  logs: { title: '运行日志', crumb: '实时事件流（SSE）' },
   settings: { title: '设置', crumb: '下载参数（网页端持久化）' },
 }
 
@@ -141,7 +146,7 @@ export default function App() {
   ) ?? false
 
   const navBadge = (key: Tab): number | null => {
-    if (key === 'dashboard') return hasActive ? (snapshot?.tasks.filter((t) => t.status === 'downloading').length ?? 0) : null
+    if (key === 'tasks') return hasActive ? (snapshot?.tasks.filter((t) => t.status === 'downloading').length ?? 0) : null
     if (key === 'discovered') return snapshot?.discoveredCount ? snapshot.discoveredCount : null
     return null
   }
@@ -257,6 +262,10 @@ export default function App() {
             <VideoLibrary videos={videos} onPlay={setPlaying} />
           )}
 
+          {tab === 'tasks' && (
+            <TasksPage tasks={snapshot?.tasks ?? []} />
+          )}
+
           {tab === 'discovered' && (
             <Discovered snapshot={snapshot} version={discoveredVersion} />
           )}
@@ -271,6 +280,10 @@ export default function App() {
 
           {tab === 'custom' && (
             <TopicDownload onEnqueued={refresh} />
+          )}
+
+          {tab === 'logs' && (
+            <EventLog events={events} fullPage />
           )}
 
           {tab === 'settings' && (
@@ -289,24 +302,101 @@ export default function App() {
 }
 
 // ==========================================
-// 概览页
+// 概览页：统计卡 + 进行中任务摘要 + 最近事件摘要
 // ==========================================
 function Dashboard({ snapshot, events }: {
   snapshot: Awaited<ReturnType<typeof fetchStatus>> | null
   events: Event[]
 }) {
+  const tasks = snapshot?.tasks ?? []
+  const active = tasks.filter((t) => t.status === 'pending' || t.status === 'resolving' || t.status === 'downloading')
+  const recent = events.slice(-8).reverse()
+
   return (
     <>
       <StatsCards snapshot={snapshot} />
       <div className="dash">
         <div className="col">
-          <TaskList tasks={snapshot?.tasks ?? []} />
+          <RecentTasksCard active={active} />
         </div>
         <div className="col">
-          <EventLog events={events} />
+          <RecentEventsCard events={recent} />
         </div>
       </div>
     </>
+  )
+}
+
+/** 概览：进行中任务摘要（跳转任务页看全部） */
+function RecentTasksCard({ active }: { active: Task[] }) {
+  return (
+    <div className="card">
+      <div className="card-head">
+        <h3>
+          <span className="h-icon"><IconHistory size={14} /></span>
+          进行中的下载
+        </h3>
+        <div className="side">
+          <span className="badge">{active.length}</span>
+        </div>
+      </div>
+      <div className="task-list">
+        {active.length === 0 ? (
+          <EmptyState title="当前没有下载任务" hint="「发现」页选择下载，或用「自定义下载」输入帖子 URL/ID" />
+        ) : (
+          active.map((t) => (
+            <div className="task" key={t.topicId}>
+              <div className="row1">
+                <span className={`status-chip ${t.status}`}>{t.status === 'downloading' ? '下载中' : t.status === 'resolving' ? '解析中' : '等待'}</span>
+                <span className="title" title={t.title}>{t.title || `topic_${t.topicId}`}</span>
+                {t.status === 'downloading' && <span className="meta">{Math.round(t.progress)}%</span>}
+              </div>
+              {(t.status === 'downloading') && (
+                <div className="progressbar downloading">
+                  <div className="fill" style={{ width: `${Math.max(t.progress, 2)}%` }} />
+                </div>
+              )}
+              {t.status === 'resolving' && (
+                <div className="progressbar indeterminate">
+                  <div className="fill" style={{ width: '34%' }} />
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** 概览：最近事件摘要（跳转日志页看全部） */
+function RecentEventsCard({ events }: { events: Event[] }) {
+  return (
+    <div className="card log-card">
+      <div className="card-head">
+        <h3>
+          <span className="h-icon"><IconClock size={14} /></span>
+          最近动态
+        </h3>
+        <div className="side">
+          <span className="badge">{events.length}</span>
+        </div>
+      </div>
+      <div className="log">
+        {events.length === 0 ? (
+          <div className="log-dim">等待事件流（SSE）...</div>
+        ) : (
+          events.map((e, i) => (
+            <div key={i} className={`log-${e.level}`}>
+              <span className="log-time">
+                {new Date(e.time).toLocaleTimeString('zh-CN', { hour12: false })}
+              </span>
+              {e.msg}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
   )
 }
 

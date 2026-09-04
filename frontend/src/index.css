@@ -466,6 +466,12 @@ input, select, textarea { font-family: inherit; }
   height: clamp(280px, calc(100dvh - 220px), 720px);
   background: var(--surface-2);
 }
+/* 日志独立页：占满剩余视口（除顶栏），不再 sticky */
+.log-card.log-fullpage { position: static; }
+.log-card.log-fullpage .log {
+  height: calc(100dvh - 210px);
+  min-height: 360px;
+}
 
 /* ============================================================
    任务列表
