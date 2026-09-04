@@ -228,6 +228,22 @@ export async function cancelTask(topicId: number): Promise<void> {
   if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`)
 }
 
+/** 自定义下载：批量输入帖子 URL/ID 解析并直接创建下载任务 */
+export async function downloadTopics(input: string): Promise<{
+  enqueued: number
+  skipped: number
+  invalid: number
+  parsed: number
+}> {
+  const r = await fetch('/api/download/topics', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ input }),
+  })
+  if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`)
+  return r.json()
+}
+
 export async function dismissDiscovered(topicIds: number[]): Promise<void> {
   const r = await fetch('/api/discovered/dismiss', {
     method: 'POST',

@@ -10,7 +10,7 @@ import {
   videoFileURL,
   AuthMode,
 } from './api'
-import { IconClose, IconDashboard, IconDownload, IconGlobe, IconHistory, IconLogout, IconRefresh, IconSettings, IconSearch, IconUsers, IconVideo } from './icons'
+import { IconClose, IconDashboard, IconDownload, IconGlobe, IconHistory, IconLogout, IconRefresh, IconSettings, IconSearch, IconUsers, IconVideo, IconPlus } from './icons'
 import StatsCards from './components/StatsCards'
 import TaskList from './components/TaskList'
 import VideoLibrary from './components/VideoLibrary'
@@ -19,11 +19,12 @@ import Settings from './components/Settings'
 import Downloads from './components/Downloads'
 import Discovered from './components/Discovered'
 import Authors from './components/Authors'
+import TopicDownload from './components/TopicDownload'
 import Login from './components/Login'
 import Setup from './components/Setup'
 import { EmptyState } from './components/common'
 
-type Tab = 'dashboard' | 'library' | 'discovered' | 'authors' | 'downloads' | 'settings'
+type Tab = 'dashboard' | 'library' | 'discovered' | 'authors' | 'downloads' | 'custom' | 'settings'
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'dashboard', label: '概览', icon: <IconDashboard size={16} /> },
@@ -31,6 +32,7 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'discovered', label: '发现', icon: <IconSearch size={16} /> },
   { key: 'authors', label: '作者', icon: <IconUsers size={16} /> },
   { key: 'downloads', label: '下载记录', icon: <IconHistory size={16} /> },
+  { key: 'custom', label: '自定义下载', icon: <IconPlus size={16} /> },
   { key: 'settings', label: '设置', icon: <IconSettings size={16} /> },
 ]
 
@@ -40,6 +42,7 @@ const TAB_META: Record<Tab, { title: string; crumb: string }> = {
   discovered: { title: '发现', crumb: '检查到的新视频 · 按时间筛选手动下载' },
   authors: { title: '作者', crumb: '添加 · 开关 · 删除作者 · 检查状态' },
   downloads: { title: '下载记录', crumb: '每次下载的流水明细' },
+  custom: { title: '自定义下载', crumb: '输入帖子 URL / ID 直接下载 · 支持批量' },
   settings: { title: '设置', crumb: '下载参数（网页端持久化）' },
 }
 
@@ -264,6 +267,10 @@ export default function App() {
 
           {tab === 'downloads' && (
             <Downloads key={downloadsVersion} />
+          )}
+
+          {tab === 'custom' && (
+            <TopicDownload onEnqueued={refresh} />
           )}
 
           {tab === 'settings' && (

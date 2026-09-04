@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -105,6 +106,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/downloads/delete", s.handleDownloadsDelete)
 	mux.HandleFunc("GET /api/discovered", s.handleDiscovered)
 	mux.HandleFunc("POST /api/download", s.handleDownload)
+	mux.HandleFunc("POST /api/download/topics", s.handleDownloadTopics)
 	mux.HandleFunc("POST /api/task/cancel", s.handleTaskCancel)
 	mux.HandleFunc("POST /api/discovered/dismiss", s.handleDismissDiscovered)
 	mux.HandleFunc("POST /api/authors/add", s.handleAddAuthor)
@@ -770,6 +772,74 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	enqueued := s.mon.EnqueueManual(req.TopicIDs)
 	writeJSON(w, map[string]any{"ok": true, "enqueued": enqueued})
+}
+
+// handleDownloadTopics 自定义下载：批量输入帖子 URL 或 ID。
+// 输入解析：每行/空格/逗号分隔；URL 提取 /topic/<id>（如 https://site/topic/2096629），
+// 纯数字视为帖子 ID。逐个拉详情核验后入队（不要求在发现列表中）。
+func (s *Server) handleDownloadTopics(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Input string `json:"input"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	ids, invalid := parseTopicInput(req.Input)
+	if len(ids) == 0 {
+		http.Error(w, "未解析到有效的帖子 ID 或 URL", http.StatusBadRequest)
+		return
+	}
+	if len(ids) > 100 {
+		http.Error(w, "单次最多 100 个帖子", http.StatusBadRequest)
+		return
+	}
+	enqueued, skipped := s.mon.EnqueueTopics(ids)
+	writeJSON(w, map[string]any{
+		"ok": true, "enqueued": enqueued, "skipped": skipped,
+		"invalid": invalid, "parsed": len(ids),
+	})
+}
+
+// parseTopicInput 从用户输入解析帖子 ID 列表。
+// 支持：换行/空格/逗号分隔；纯数字 = ID；URL 取路径中的 topic/<id>。
+// 返回去重后的 ID 与无法解析的原始片段数。
+func parseTopicInput(input string) ([]int64, int) {
+	var ids []int64
+	seen := map[int64]bool{}
+	invalid := 0
+	for _, tok := range strings.FieldsFunc(input, func(r rune) bool {
+		return r == '\n' || r == '\r' || r == '\t' || r == ' ' || r == ',' || r == '，' || r == ';'
+	}) {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		var id int64
+		if n, err := strconv.ParseInt(tok, 10, 64); err == nil {
+			id = n
+		} else if u, err := url.Parse(tok); err == nil {
+			// 形如 /topic/<id> 或 /topic/<id>?x=1 或 /t/<id>
+			parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+			for i, p := range parts {
+				if (p == "topic" || p == "t") && i+1 < len(parts) {
+					if n, err := strconv.ParseInt(parts[i+1], 10, 64); err == nil {
+						id = n
+					}
+					break
+				}
+			}
+		}
+		if id <= 0 {
+			invalid++
+			continue
+		}
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids, invalid
 }
 
 // handleTaskCancel 取消下载任务（pending/resolving/downloading 可取消）。

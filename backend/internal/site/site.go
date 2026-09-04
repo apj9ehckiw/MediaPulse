@@ -68,6 +68,13 @@ type TopicDetail struct {
 	Title       string       `json:"title"`
 	CreateTime  string       `json:"createTime"`
 	Attachments []Attachment `json:"attachments"`
+	User        DetailUser   `json:"user"`
+}
+
+// DetailUser 详情接口的作者信息（自定义下载时补任务作者/昵称）。
+type DetailUser struct {
+	ID       int64  `json:"id"`
+	Nickname string `json:"nickname"`
 }
 
 type apiEnvelope struct {

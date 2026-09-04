@@ -1281,6 +1281,87 @@ func (m *Monitor) EnqueueManual(ids []int64) int {
 	return enqueued
 }
 
+// EnqueueTopics 按帖子 ID 直接创建下载任务（自定义下载页：URL/ID 批量输入）。
+// 与 EnqueueManual 的区别：不要求帖子已在发现列表中——逐个拉详情补齐标题/作者/时间，
+// 无视频附件的直接置 skipped。
+// 返回：入队数、跳过数（已下载/已在队列/无视频）。
+func (m *Monitor) EnqueueTopics(ids []int64) (enqueued, skipped int) {
+	for _, id := range ids {
+		if id <= 0 {
+			skipped++
+			continue
+		}
+		m.mu.Lock()
+		if _, done := m.state.Topics[id]; done {
+			m.mu.Unlock()
+			skipped++
+			continue
+		}
+		if t, queued := m.tasks[id]; queued {
+			if t.Status == StatusPending || t.Status == StatusResolving || t.Status == StatusDownloading {
+				m.mu.Unlock()
+				skipped++
+				continue
+			}
+		}
+		m.mu.Unlock()
+
+		// 拉详情补齐信息（标题/作者/时间）
+		detail, err := m.client.Detail(id)
+		if err != nil {
+			m.emit("error", "帖子 %d 详情获取失败: %v", id, err)
+			skipped++
+			continue
+		}
+		if detail.VideoM3u8() == "" {
+			m.emit("dim", "帖子 %d 无视频附件，跳过", id)
+			skipped++
+			continue
+		}
+
+		m.mu.Lock()
+		// 双检：拉详情期间可能被其他流程入队/完成
+		if _, done := m.state.Topics[id]; done {
+			m.mu.Unlock()
+			skipped++
+			continue
+		}
+		if t, queued := m.tasks[id]; queued {
+			if t.Status == StatusPending || t.Status == StatusResolving || t.Status == StatusDownloading {
+				m.mu.Unlock()
+				skipped++
+				continue
+			}
+			t.Status = StatusPending
+			t.Error = ""
+			t.Progress = 0
+			t.SegDone, t.SegTotal = 0, 0
+			t.FinishedAt = time.Time{}
+			t.AddedAt = time.Now()
+			m.mu.Unlock()
+			enqueued++
+			continue
+		}
+		task := &Task{
+			TopicID:    id,
+			AuthorUID:  detail.User.ID,
+			Title:      detail.Title,
+			CreateTime: detail.CreateTime,
+			Status:     StatusPending,
+			AddedAt:    time.Now(),
+		}
+		m.tasks[id] = task
+		m.queue = append(m.queue, task)
+		m.mu.Unlock()
+		enqueued++
+		m.emit("info", "帖子 %d 已加入下载队列: %s", id, truncateRunes(detail.Title, 40))
+	}
+	if enqueued > 0 {
+		m.triggerDL()
+	}
+	return enqueued, skipped
+}
+
 // Discovered 返回未下载的发现记录（发布时间降序）。
 func (m *Monitor) Discovered() []DiscoveredRecord {
 	m.mu.Lock()
