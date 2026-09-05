@@ -964,6 +964,52 @@ select.input { cursor: pointer; }
 }
 .td-actions .btn { flex-shrink: 0; }
 
+/* 自定义下载：解析进度区（点按钮后逐条显示） */
+.td-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  animation: rowIn 0.3s ease both;
+}
+.td-progress-head {
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--text-2);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 9px;
+}
+.td-progress-count {
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+/* 逐条结果（新→旧，最多 5 条） */
+.td-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.td-recent-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  animation: rowIn 0.25s ease both;
+}
+.td-recent-id { color: var(--text-4); font-family: var(--font-mono); }
+.td-outcome { font-weight: 550; }
+.td-outcome-enqueued, .td-outcome-requeued { color: var(--ok); }
+.td-outcome-error { color: var(--err); }
+.td-outcome-no_video, .td-outcome-invalid { color: var(--warn); }
+.td-outcome-downloaded, .td-outcome-queued { color: var(--text-3); }
+
 /* ffmpeg 缺失提示横幅 */
 .ff-banner {
   display: flex;

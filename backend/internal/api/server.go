@@ -962,6 +962,8 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 // handleDownloadTopics 自定义下载：批量输入帖子 URL 或 ID。
 // 输入解析：每行/空格/逗号分隔；URL 提取 /topic/<id>（如 https://site/topic/2096629），
 // 纯数字视为帖子 ID。逐个拉详情核验后入队（不要求在发现列表中）。
+// 流式响应（SSE 风格行协议）：逐条推送解析进度 + 末行汇总 JSON，
+// 前端在按钮旁实时显示「正在解析 X/Y」。
 func (s *Server) handleDownloadTopics(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Input string `json:"input"`
@@ -979,10 +981,48 @@ func (s *Server) handleDownloadTopics(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "单次最多 100 个帖子", http.StatusBadRequest)
 		return
 	}
-	enqueued, skipped := s.mon.EnqueueTopics(ids)
-	writeJSON(w, map[string]any{
-		"ok": true, "enqueued": enqueued, "skipped": skipped,
-		"invalid": invalid, "parsed": len(ids),
+
+	// 换成流式响应：先发头，再逐条推送进度行
+	fl, canFlush := w.(http.Flusher)
+	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+
+	type itemMsg struct {
+		Kind    string `json:"type"` // item=单个帖子进度 done=汇总
+		Done    int    `json:"done,omitempty"`
+		Total   int    `json:"total,omitempty"`
+		TopicID int64  `json:"topicId,omitempty"`
+		Outcome string `json:"outcome,omitempty"`
+	}
+	type summaryMsg struct {
+		Kind     string `json:"type"` // done=汇总
+		OK       bool   `json:"ok"`
+		Enqueued int    `json:"enqueued"`
+		Skipped  int    `json:"skipped"`
+		Invalid  int    `json:"invalid"`
+		Parsed   int    `json:"parsed"`
+	}
+	writeLine := func(v any) bool {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return false
+		}
+		if _, err := w.Write(append(b, '\n')); err != nil {
+			return false
+		}
+		if canFlush {
+			fl.Flush()
+		}
+		return true
+	}
+
+	enqueued, skipped := s.mon.EnqueueTopics(ids, func(done, total int, topicID int64, outcome string) {
+		writeLine(itemMsg{Kind: "item", Done: done, Total: total, TopicID: topicID, Outcome: outcome})
+	})
+	writeLine(summaryMsg{
+		Kind: "done", OK: enqueued > 0, Enqueued: enqueued, Skipped: skipped,
+		Invalid: invalid, Parsed: len(ids),
 	})
 }
 

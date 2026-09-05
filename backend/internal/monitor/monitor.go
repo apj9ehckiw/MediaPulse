@@ -1409,23 +1409,36 @@ func (m *Monitor) EnqueueManual(ids []int64) int {
 // EnqueueTopics 按帖子 ID 直接创建下载任务（自定义下载页：URL/ID 批量输入）。
 // 与 EnqueueManual 的区别：不要求帖子已在发现列表中——逐个拉详情补齐标题/作者/时间，
 // 无视频附件的直接置 skipped。
+// onItem（可空）：每处理完一个帖子回调一次（已完成数/总数/帖子 ID/结果），
+// 供 HTTP 层流式推送解析进度。
 // 返回：入队数、跳过数（已下载/已在队列/无视频）。
-func (m *Monitor) EnqueueTopics(ids []int64) (enqueued, skipped int) {
+func (m *Monitor) EnqueueTopics(ids []int64, onItem func(done, total int, topicID int64, outcome string)) (enqueued, skipped int) {
+	total := len(ids)
+	processed := 0
+	report := func(id int64, outcome string) {
+		processed++
+		if onItem != nil {
+			onItem(processed, total, id, outcome)
+		}
+	}
 	for _, id := range ids {
 		if id <= 0 {
 			skipped++
+			report(id, "invalid")
 			continue
 		}
 		m.mu.Lock()
 		if _, done := m.state.Topics[id]; done {
 			m.mu.Unlock()
 			skipped++
+			report(id, "downloaded")
 			continue
 		}
 		if t, queued := m.tasks[id]; queued {
 			if t.Status == StatusPending || t.Status == StatusResolving || t.Status == StatusDownloading {
 				m.mu.Unlock()
 				skipped++
+				report(id, "queued")
 				continue
 			}
 		}
@@ -1436,11 +1449,13 @@ func (m *Monitor) EnqueueTopics(ids []int64) (enqueued, skipped int) {
 		if err != nil {
 			m.emit("error", "帖子 %d 详情获取失败: %v", id, err)
 			skipped++
+			report(id, "error")
 			continue
 		}
 		if detail.VideoM3u8() == "" {
 			m.emit("dim", "帖子 %d 无视频附件，跳过", id)
 			skipped++
+			report(id, "no_video")
 			continue
 		}
 		if detail.User.ID > 0 && detail.User.Nickname != "" {
@@ -1452,12 +1467,14 @@ func (m *Monitor) EnqueueTopics(ids []int64) (enqueued, skipped int) {
 		if _, done := m.state.Topics[id]; done {
 			m.mu.Unlock()
 			skipped++
+			report(id, "downloaded")
 			continue
 		}
 		if t, queued := m.tasks[id]; queued {
 			if t.Status == StatusPending || t.Status == StatusResolving || t.Status == StatusDownloading {
 				m.mu.Unlock()
 				skipped++
+				report(id, "queued")
 				continue
 			}
 			t.Status = StatusPending
@@ -1468,6 +1485,7 @@ func (m *Monitor) EnqueueTopics(ids []int64) (enqueued, skipped int) {
 			t.AddedAt = time.Now()
 			m.mu.Unlock()
 			enqueued++
+			report(id, "requeued")
 			continue
 		}
 		task := &Task{
@@ -1482,6 +1500,7 @@ func (m *Monitor) EnqueueTopics(ids []int64) (enqueued, skipped int) {
 		m.queue = append(m.queue, task)
 		m.mu.Unlock()
 		enqueued++
+		report(id, "enqueued")
 		m.emit("info", "帖子 %d 已加入下载队列: %s", id, truncateRunes(detail.Title, 40))
 	}
 	if enqueued > 0 {

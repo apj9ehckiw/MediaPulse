@@ -231,20 +231,77 @@ export async function cancelTask(topicId: number): Promise<void> {
   if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`)
 }
 
-/** 自定义下载：批量输入帖子 URL/ID 解析并直接创建下载任务 */
-export async function downloadTopics(input: string): Promise<{
+/** 单个帖子的解析进度（NDJSON 流式响应的一行） */
+export interface TopicResolveItem {
+  type: 'item'
+  /** 已处理数（含当前这条） */
+  done: number
+  total: number
+  topicId: number
+  /** 处理结果：enqueued=入队 requeued=重新入队 downloaded=已下载 queued=已在队列 no_video=无视频 error=获取失败 invalid=无效 */
+  outcome: string
+}
+
+/** 自定义下载汇总（NDJSON 流的最后一行） */
+export interface TopicResolveSummary {
+  type: 'done'
+  ok: boolean
   enqueued: number
   skipped: number
   invalid: number
   parsed: number
-}> {
+}
+
+export type TopicResolveLine = TopicResolveItem | TopicResolveSummary
+
+/**
+ * 自定义下载：批量输入帖子 URL/ID 解析并直接创建下载任务。
+ * 流式（NDJSON）响应：逐帖推送解析进度行，末行为汇总；
+ * onProgress 每处理完一个帖子回调一次，供按钮实时显示 X/Y。
+ */
+export async function downloadTopics(
+  input: string,
+  onProgress?: (line: TopicResolveItem) => void,
+): Promise<TopicResolveSummary> {
   const r = await fetch('/api/download/topics', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ input }),
   })
   if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`)
-  return r.json()
+  if (!r.body) {
+    // 流不可读（旧浏览器兜底）：无进度，直接等汇总
+    return (await r.json()) as TopicResolveSummary
+  }
+
+  const reader = r.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  let summary: TopicResolveSummary | null = null
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    let nl: number
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim()
+      buf = buf.slice(nl + 1)
+      if (!line) continue
+      try {
+        const msg = JSON.parse(line) as TopicResolveLine
+        if (msg.type === 'item') {
+          onProgress?.(msg)
+        } else if (msg.type === 'done') {
+          summary = msg
+        }
+      } catch { /* 忽略无法解析的行 */ }
+    }
+  }
+  if (!summary) {
+    // 流中断且没有汇总行：按失败处理
+    throw new Error('连接中断，解析结果未知（已入队的不受影响，见「任务」页）')
+  }
+  return summary
 }
 
 /** 数据导入结果 */
