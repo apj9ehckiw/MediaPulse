@@ -147,6 +147,8 @@ type Monitor struct {
 	checking bool
 	checkDone  int // 本轮检查已完成的作者数（供网页端进度显示）
 	checkTotal int // 本轮检查的启用作者总数
+	// 当前在飞（解析/下载中）任务数：drainQueue 领取/完成的并发闸门（锁内读写）
+	dlInFlightN int
 	wake     chan struct{}
 	dlWake   chan struct{}
 	stopCh   chan struct{}
@@ -205,19 +207,10 @@ func (m *Monitor) Run() {
 			}
 		}
 	}()
-	// 下载队列：checkAll 与手动下载统一经此执行。
-	// 每次唤醒独立起一轮 drainQueue（多轮可并行）：逐个点击下载时每笔
-	// 立即调度，不必等上一轮结束；并发上限由 claimTask 的锁内计数保证
-	go func() {
-		for {
-			select {
-			case <-m.stopCh:
-				return
-			case <-m.dlWake:
-				go m.drainQueue()
-			}
-		}
-	}()
+	// 下载队列：常驻单轮 drainQueue 调度（checkAll 与手动/自定义入队统一经此执行）。
+	// 领取即派 goroutine，并发上限由 claimTask 的锁内在飞计数保证；
+	// 任务完成后释放名额并唤醒调度补位——批量入队也能持续吃满配置的并发数。
+	go m.drainQueue()
 }
 
 // OnEvent 注册事件订阅者（Web SSE）。
@@ -929,13 +922,26 @@ func (m *Monitor) dlConcurrency() int {
 	return n
 }
 
-// dlInFlight 当前正在下载（含解析中）的任务数（跨 drainQueue 轮次共享的并发闸门）。
-var dlInFlight int
+// claimTask 锁内领取一个 pending 任务：并发未满且队列有待领取时
+// 置 resolving 占位并计入在飞数，返回任务；否则返回 nil。
+func (m *Monitor) claimTask() *Task {
+	if m.dlInFlightN >= m.dlConcurrency() {
+		return nil
+	}
+	for _, task := range m.queue {
+		if task.Status == StatusPending {
+			task.Status = StatusResolving // 立即占位，防止重复领取
+			m.dlInFlightN++
+			return task
+		}
+	}
+	return nil
+}
 
-// drainQueue 从队列取 pending 任务执行。
-// 可多轮并行（每次入队各起一轮）：领取任务前先检查全局在飞数，
-// 达到 dlConcurrency 上限时等待在飞任务完成（而非空转），
-// 保证逐个点击与批量勾选下载的并发行为一致。
+// drainQueue 下载队列的常驻调度循环（Run 启动，全局仅一轮）。
+// 领到任务就派 goroutine 执行（并发上限由 claimTask 的锁内在飞计数保证），
+// 队列空或并发满时短暂等待再试——任务完成释放名额后自动补位，
+// 不依赖入队方再次唤醒（批量入队 400 个任务也能持续吃满配置的并发数）。
 func (m *Monitor) drainQueue() {
 	for {
 		select {
@@ -944,37 +950,32 @@ func (m *Monitor) drainQueue() {
 		default:
 		}
 		m.mu.Lock()
-		if dlInFlight >= m.dlConcurrency() {
-			m.mu.Unlock()
-			time.Sleep(200 * time.Millisecond) // 并发已满：等在飞任务完成再领
-			continue
-		}
-		var t *Task
-		for _, task := range m.queue {
-			if task.Status == StatusPending {
-				t = task
-				break
-			}
-		}
-		if t != nil {
-			t.Status = StatusResolving // 立即占位，防止其他 worker 重复领取
-			dlInFlight++
-		}
+		t := m.claimTask()
 		m.mu.Unlock()
 		if t == nil {
-			return
-		}
-		if err := m.downloadOne(t); err != nil {
-			// 取消的任务不写失败历史（downloadOne 已置 canceled 状态）
-			if !errors.Is(err, errTaskCanceled) {
-				m.addHistory(taskTopic(*t), "", 0, statusOf(err), err.Error())
-				m.emit("error", "帖子 %d 失败: %v", t.TopicID, err)
+			// 无可领任务：等待（唤醒信号或超时兜底，如并发满等名额释放）
+			select {
+			case <-m.stopCh:
+				return
+			case <-m.dlWake:
+			case <-time.After(500 * time.Millisecond):
 			}
+			continue
 		}
-		m.mu.Lock()
-		dlInFlight--
-		m.mu.Unlock()
-		time.Sleep(300 * time.Millisecond)
+		go func(t *Task) {
+			if err := m.downloadOne(t); err != nil {
+				// 取消的任务不写失败历史（downloadOne 已置 canceled 状态）
+				if !errors.Is(err, errTaskCanceled) {
+					m.addHistory(taskTopic(*t), "", 0, statusOf(err), err.Error())
+					m.emit("error", "帖子 %d 失败: %v", t.TopicID, err)
+				}
+			}
+			// 完成释放名额并立即唤醒调度（让下一个 pending 补位）
+			m.mu.Lock()
+			m.dlInFlightN--
+			m.mu.Unlock()
+			m.triggerDL()
+		}(t)
 	}
 }
 
