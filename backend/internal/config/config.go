@@ -126,8 +126,9 @@ func validate(c *Config) error {
 	if c.Workers <= 0 {
 		c.Workers = 8
 	}
-	if c.Workers > 32 {
-		c.Workers = 32
+	// 上限 256：视频 CDN 单连接限速约 1.3Mbps，高并发（96+）才能吃满带宽
+	if c.Workers > 256 {
+		c.Workers = 256
 	}
 	if c.Interval < 0 {
 		c.Interval = 0

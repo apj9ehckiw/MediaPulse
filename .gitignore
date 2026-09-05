@@ -16,6 +16,9 @@ server-run.log
 ../research/
 ../source/
 
+# 运行时自动安装的 ffmpeg
+bin/
+
 # 杂项
 *.log
 *.tmp

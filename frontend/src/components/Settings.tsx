@@ -218,11 +218,11 @@ export default function Settings({ onSaved }: Props) {
               className="input"
               type="number"
               min={1}
-              max={32}
+              max={256}
               value={cfg.workers}
               onChange={(e) => setCfg({ ...cfg, workers: Number(e.target.value) || 8 })}
             />
-            <span className="hint-inline">1–32，越高下载越快但更占带宽</span>
+            <span className="hint-inline">1–256。站点 CDN 单连接限速，高并发（96+）才能吃满带宽</span>
           </div>
           <div className="form-row">
             <label>ffmpeg</label>
