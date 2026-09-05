@@ -244,6 +244,31 @@ export async function downloadTopics(input: string): Promise<{
   return r.json()
 }
 
+/** 数据导入结果 */
+export interface DataImportResult {
+  ok: boolean
+  addedAuthors: number
+  addedTopics: number
+  addedDiscovered: number
+  addedHistory: number
+}
+
+/** 导出全部数据（返回下载文件名） */
+export function exportDataURL(): string {
+  return '/api/data/export'
+}
+
+/** 导入数据包（合并：作者去重合并、状态/流水补齐；密码不动） */
+export async function importData(payload: string): Promise<DataImportResult> {
+  const r = await fetch('/api/data/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: payload,
+  })
+  if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`)
+  return r.json()
+}
+
 export async function dismissDiscovered(topicIds: number[]): Promise<void> {
   const r = await fetch('/api/discovered/dismiss', {
     method: 'POST',

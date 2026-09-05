@@ -118,6 +118,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/setup", s.handleAuthSetup)
 	mux.HandleFunc("GET /api/ffmpeg", s.handleFFmpegStatus)
 	mux.HandleFunc("POST /api/ffmpeg/install", s.handleFFmpegInstall)
+	mux.HandleFunc("GET /api/data/export", s.handleDataExport)
+	mux.HandleFunc("POST /api/data/import", s.handleDataImport)
 
 	// 嵌入式前端
 	if dist, err := fs.Sub(web.Dist, "dist"); err == nil {
@@ -448,6 +450,184 @@ func humanBytes(n int64) string {
 		return fmt.Sprintf("%.1f MB", float64(n)/float64(unit))
 	}
 	return fmt.Sprintf("%.0f KB", float64(n)/1024)
+}
+
+// ==========================================
+// 数据导出 / 导入（迁移部署）
+// ==========================================
+
+// dataExport 导出包结构（不含访问密码、不含视频文件）。
+type dataExport struct {
+	Format    string        `json:"format"`    // 固定 mediapulse-data
+	Version   string        `json:"version"`   // 导出程序版本
+	ExportAt  string        `json:"exportAt"`  // 导出时间
+	Config    config.Config `json:"config"`    // 配置（密码已清空）
+	State     any           `json:"state"`     // 监控状态（去重/发现/检查时间/昵称缓存）
+	Downloads []any         `json:"downloads"` // 下载流水
+}
+
+// handleDataExport 导出全部数据为一个 JSON 文件下载。
+func (s *Server) handleDataExport(w http.ResponseWriter, r *http.Request) {
+	cfg := s.store.Get()
+	exported := cfg
+	exported.Password = "" // 密码绝不导出
+	out := dataExport{
+		Format:    "mediapulse-data",
+		Version:   Version(),
+		ExportAt:  time.Now().Format("2006-01-02 15:04:05"),
+		Config:    exported,
+		State:     s.mon.ExportState(),
+		Downloads: downloadsToAny(s.hist.List(0)),
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf("attachment; filename=mediapulse-data-%s.json", time.Now().Format("20060102-150405")))
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", " ")
+	_ = enc.Encode(out)
+	s.mon.EmitInfo("已导出站点数据（配置/状态/下载流水，不含密码与视频文件）")
+}
+
+func downloadsToAny(rows []history.Record) []any {
+	out := make([]any, len(rows))
+	for i, r := range rows {
+		out[i] = r
+	}
+	return out
+}
+
+// handleDataImport 导入此前导出的数据包（JSON 上传）。
+// 合并策略：作者列表按 UID 去重合并（已有配置优先）；监控状态合并
+// （已有优先，缺失补齐）；下载流水按 (topicId,at) 去重追加；密码不动。
+func (s *Server) handleDataImport(w http.ResponseWriter, r *http.Request) {
+	var in dataExport
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<20)).Decode(&in); err != nil {
+		http.Error(w, "导入文件解析失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if in.Format != "mediapulse-data" {
+		http.Error(w, "不是 MediaPulse 数据导出文件（format 不符）", http.StatusBadRequest)
+		return
+	}
+
+	// 1. 合并作者列表（配置）
+	old := s.store.Get()
+	merged := old
+	merged.Password = old.Password // 密码保持本机
+	merged.AuthDisabled = old.AuthDisabled
+	seen := map[int64]bool{}
+	for _, a := range old.Authors {
+		seen[a.UID] = true
+	}
+	addedAuthors := 0
+	for _, a := range in.Config.Authors {
+		if a.UID > 0 && !seen[a.UID] {
+			seen[a.UID] = true
+			if a.Note == "" {
+				// 没备注的从导入的昵称缓存补
+				a.Note = in.lookUpNick(a.UID)
+			}
+			merged.Authors = append(merged.Authors, a)
+			addedAuthors++
+		}
+	}
+	// 其他参数：导入的非零值覆盖（间隔/并发/自动下载等以导出为准，方便整机迁移）
+	if in.Config.Interval > 0 {
+		merged.Interval = in.Config.Interval
+	}
+	if in.Config.Workers > 0 {
+		merged.Workers = in.Config.Workers
+	}
+	merged.AutoDownload = in.Config.AutoDownload
+	merged.AutoDownloadAfter = in.Config.AutoDownloadAfter
+	if in.Config.APIBase != "" {
+		merged.APIBase = in.Config.APIBase
+	}
+	if in.Config.ListType == 0 || in.Config.ListType == 1 || in.Config.ListType == 3 {
+		merged.ListType = in.Config.ListType
+	}
+	merged.GitHubProxy = in.Config.GitHubProxy
+	merged.FFmpegAutoInstall = in.Config.FFmpegAutoInstall
+	if _, err := s.store.Update(merged); err != nil {
+		http.Error(w, "配置合并失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// 2. 合并监控状态
+	stateJSON, err := json.Marshal(in.State)
+	if err != nil {
+		http.Error(w, "状态数据解析失败", http.StatusBadRequest)
+		return
+	}
+	var st persistedStateLike
+	if err := json.Unmarshal(stateJSON, &st); err != nil {
+		http.Error(w, "状态数据解析失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	addedTopics, addedDiscovered := s.mon.ImportState(st.toPersisted())
+
+	// 3. 合并下载流水（按 topicId+时间去重追加）
+	histAdded := 0
+	if s.hist != nil {
+		histAdded = s.hist.ImportUnique(downloadsFromAny(in.Downloads))
+	}
+
+	s.mon.EmitInfo("数据导入完成：新增作者 %d、去重记录 %d、发现记录 %d、下载流水 %d（密码与视频文件不受影响）",
+		addedAuthors, addedTopics, addedDiscovered, histAdded)
+	writeJSON(w, map[string]any{
+		"ok": true, "addedAuthors": addedAuthors, "addedTopics": addedTopics,
+		"addedDiscovered": addedDiscovered, "addedHistory": histAdded,
+	})
+}
+
+// lookUpNick 从导入数据的状态里找作者昵称（作者无备注时补）。
+func (d *dataExport) lookUpNick(uid int64) string {
+	if d.State == nil {
+		return ""
+	}
+	b, err := json.Marshal(d.State)
+	if err != nil {
+		return ""
+	}
+	var st struct {
+		AuthorNames map[int64]string `json:"authorNames"`
+	}
+	if err := json.Unmarshal(b, &st); err != nil {
+		return ""
+	}
+	return st.AuthorNames[uid]
+}
+
+// persistedStateLike 导入解析用（state 字段是 any）。
+type persistedStateLike struct {
+	Topics      map[int64]monitor.DownloadedRecord  `json:"topics"`
+	Discovered  map[int64]monitor.DiscoveredRecord  `json:"discovered"`
+	LastChecks  map[int64]string                    `json:"lastChecks"`
+	AuthorNames map[int64]string                    `json:"authorNames"`
+}
+
+func (p persistedStateLike) toPersisted() monitor.PersistedStateExport {
+	return monitor.PersistedStateExport{
+		Topics:      p.Topics,
+		Discovered:  p.Discovered,
+		LastChecks:  p.LastChecks,
+		AuthorNames: p.AuthorNames,
+	}
+}
+
+func downloadsFromAny(rows []any) []history.Record {
+	var out []history.Record
+	for _, r := range rows {
+		b, err := json.Marshal(r)
+		if err != nil {
+			continue
+		}
+		var rec history.Record
+		if err := json.Unmarshal(b, &rec); err == nil {
+			out = append(out, rec)
+		}
+	}
+	return out
 }
 
 // ListenAndServe 启动。

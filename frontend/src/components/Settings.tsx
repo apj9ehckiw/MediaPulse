@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
-import { AppConfig, fetchConfig, fetchFFmpeg, FFmpegStatus, installFFmpeg, updateConfig } from '../api'
-import { IconSettings } from '../icons'
+import { useEffect, useRef, useState } from 'react'
+import { AppConfig, exportDataURL, fetchConfig, fetchFFmpeg, FFmpegStatus, importData, installFFmpeg, updateConfig } from '../api'
+import { IconDownload, IconSettings } from '../icons'
 
 interface Props {
   onSaved: (msg: string) => void
@@ -316,6 +316,93 @@ export default function Settings({ onSaved }: Props) {
             保存配置不会触发作者检查；新作者在「作者」页添加时自动增量检查。
           </div>
         </div>
+      </div>
+
+      <DataIOCard onSaved={onSaved} />
+    </div>
+  )
+}
+
+/** 数据导出 / 导入（迁移部署） */
+function DataIOCard({ onSaved }: { onSaved: (msg: string) => void }) {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const onExport = () => {
+    // 触发浏览器下载（带会话 Cookie）
+    const a = document.createElement('a')
+    a.href = exportDataURL()
+    a.download = ''
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setResult({ ok: true, text: '导出已开始下载（mediapulse-data-….json）' })
+  }
+
+  const onImportFile = async (file: File) => {
+    setBusy(true)
+    setResult(null)
+    try {
+      const text = await file.text()
+      const r = await importData(text)
+      const msg = `导入完成：新增作者 ${r.addedAuthors} · 去重记录 ${r.addedTopics} · 发现记录 ${r.addedDiscovered} · 下载流水 ${r.addedHistory}`
+      setResult({ ok: true, text: msg })
+      onSaved(msg)
+      setTimeout(() => window.location.reload(), 1200)
+    } catch (e) {
+      setResult({ ok: false, text: String(e).replace(/^Error:\s*/, '') })
+    } finally {
+      setBusy(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-head">
+        <h3>
+          <span className="h-icon"><IconDownload size={14} /></span>
+          数据导出 / 导入
+        </h3>
+      </div>
+      <div className="settings-body">
+        <div className="form-row">
+          <label>导出数据</label>
+          <button className="btn ghost" onClick={onExport}>
+            <IconDownload size={13} />
+            导出为 JSON 文件
+          </button>
+        </div>
+        <div className="hint">
+          包含：作者列表与配置（<b>不含访问密码</b>）、下载去重记录、发现列表、
+          检查时间、作者昵称缓存、下载流水。<b>视频文件不在导出内</b>，
+          迁移时请手动复制数据目录的 videos/ 文件夹。
+        </div>
+        <div className="form-row">
+          <label>导入数据</label>
+          <input
+            ref={fileRef}
+            className="input"
+            type="file"
+            accept="application/json,.json"
+            disabled={busy}
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) onImportFile(f)
+            }}
+          />
+        </div>
+        <div className="hint">
+          选择此前导出的 JSON 文件。合并策略：作者按 UID 去重合并（已有配置优先），
+          去重/发现/流水只补充本机没有的；<b>访问密码与视频文件不受影响</b>。
+          导入完成会自动刷新页面。
+        </div>
+        {result && (
+          <div className={`add-msg ${result.ok ? 'ok' : 'err'}`} role={result.ok ? 'status' : 'alert'}>
+            {result.text}
+          </div>
+        )}
       </div>
     </div>
   )

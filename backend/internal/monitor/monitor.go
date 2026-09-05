@@ -276,6 +276,75 @@ func (m *Monitor) saveState() {
 	_ = os.WriteFile(m.paths.StateFile, data, 0o644)
 }
 
+// PersistedStateExport 导入导出用的状态结构（API 层跨包传递）。
+type PersistedStateExport = persistedState
+
+// ExportState 导出监控状态（去重/发现/检查时间/作者昵称缓存）。
+func (m *Monitor) ExportState() PersistedStateExport {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// 深拷贝（map 引用不能泄漏给调用方）
+	out := persistedState{
+		Topics:      make(map[int64]DownloadedRecord, len(m.state.Topics)),
+		Discovered:  make(map[int64]DiscoveredRecord, len(m.state.Discovered)),
+		LastChecks:  make(map[int64]string, len(m.state.LastChecks)),
+		AuthorNames: make(map[int64]string, len(m.state.AuthorNames)),
+	}
+	for k, v := range m.state.Topics {
+		out.Topics[k] = v
+	}
+	for k, v := range m.state.Discovered {
+		out.Discovered[k] = v
+	}
+	for k, v := range m.state.LastChecks {
+		out.LastChecks[k] = v
+	}
+	for k, v := range m.state.AuthorNames {
+		out.AuthorNames[k] = v
+	}
+	return out
+}
+
+// ImportState 合并导入监控状态：已有记录优先（不回退已下载状态），
+// 导入数据里的新发现记录/昵称/检查时间补充进来。
+func (m *Monitor) ImportState(in persistedState) (addedTopics, addedDiscovered int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, rec := range in.Topics {
+		if _, ok := m.state.Topics[id]; !ok {
+			m.state.Topics[id] = rec
+			addedTopics++
+		}
+	}
+	for id, rec := range in.Discovered {
+		if _, ok := m.state.Topics[id]; ok {
+			continue // 已下载的不重复登记
+		}
+		if _, ok := m.state.Discovered[id]; !ok {
+			m.state.Discovered[id] = rec
+			addedDiscovered++
+		}
+	}
+	for uid, ts := range in.LastChecks {
+		if cur, ok := m.lastCheck[uid]; !ok || ts > cur {
+			m.lastCheck[uid] = ts
+		}
+		if cur, ok := m.state.LastChecks[uid]; !ok || ts > cur {
+			m.state.LastChecks[uid] = ts
+		}
+	}
+	for uid, nick := range in.AuthorNames {
+		if nick == "" || strings.ContainsRune(nick, 0xFFFD) {
+			continue
+		}
+		if cur, ok := m.state.AuthorNames[uid]; !ok || cur == "" {
+			m.state.AuthorNames[uid] = nick
+		}
+	}
+	m.saveState()
+	return addedTopics, addedDiscovered
+}
+
 // Snapshot 生成快照。
 func (m *Monitor) Snapshot() Snapshot {
 	cfg := m.store.Get()

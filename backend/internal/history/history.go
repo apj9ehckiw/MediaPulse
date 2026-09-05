@@ -3,6 +3,7 @@ package history
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -149,6 +150,37 @@ func (s *Store) RemoveByAuthor(uid int64) int {
 		s.persist()
 	}
 	return removed
+}
+
+// ImportUnique 导入记录（数据迁移）：按 topicId+At 去重，仅追加本机没有的。
+// 返回新增条数。
+func (s *Store) ImportUnique(rows []Record) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(rows) == 0 {
+		return 0
+	}
+	seen := make(map[string]bool, len(s.rows))
+	for _, r := range s.rows {
+		seen[fmt.Sprintf("%d@%s", r.TopicID, r.At.Format(time.RFC3339Nano))] = true
+	}
+	added := 0
+	for _, r := range rows {
+		key := fmt.Sprintf("%d@%s", r.TopicID, r.At.Format(time.RFC3339Nano))
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		s.rows = append(s.rows, r)
+		added++
+	}
+	if added > 0 {
+		if len(s.rows) > s.maxMem {
+			s.rows = s.rows[len(s.rows)-s.maxMem:]
+		}
+		s.persist()
+	}
+	return added
 }
 
 // persist 落盘（调用方需持锁）。
