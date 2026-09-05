@@ -77,7 +77,10 @@ export default function Settings({ onSaved }: Props) {
       // 保存结果明细：列出与提交前相比实际变化的项（saved 可能被后端规范化）
       const changes: string[] = []
       if (saved.intervalSec !== before?.intervalSec) changes.push(`间隔 ${saved.intervalSec}s`)
-      if (saved.workers !== before?.workers) changes.push(`并发 ${saved.workers}`)
+      if (saved.workers !== before?.workers) changes.push(`段并发 ${saved.workers}`)
+      if ((saved.maxConcurrentTasks ?? 0) !== (before?.maxConcurrentTasks ?? 0)) {
+        changes.push(`任务数 ${saved.maxConcurrentTasks || '自动'}`)
+      }
       if (saved.autoDownload !== before?.autoDownload) changes.push(`自动下载${saved.autoDownload ? '开启' : '关闭'}`)
       if (saved.autoDownloadAfter !== before?.autoDownloadAfter) changes.push(`自动下载时间下限 ${saved.autoDownloadAfter || '不限'}`)
       if (saved.apiBase !== before?.apiBase) changes.push('站点基址')
@@ -218,11 +221,23 @@ export default function Settings({ onSaved }: Props) {
               className="input"
               type="number"
               min={1}
-              max={256}
+              max={512}
               value={cfg.workers}
               onChange={(e) => setCfg({ ...cfg, workers: Number(e.target.value) || 8 })}
             />
-            <span className="hint-inline">1–256。站点 CDN 单连接限速，高并发（96+）才能吃满带宽</span>
+            <span className="hint-inline">1–512（单任务同时在飞的段数）。站点 CDN 单连接限速，96+ 才能吃满带宽</span>
+          </div>
+          <div className="form-row">
+            <label>同时下载任务数</label>
+            <input
+              className="input"
+              type="number"
+              min={0}
+              max={16}
+              value={cfg.maxConcurrentTasks ?? 0}
+              onChange={(e) => setCfg({ ...cfg, maxConcurrentTasks: Number(e.target.value) || 0 })}
+            />
+            <span className="hint-inline">0 = 自动（并发/2，1–4）；可设 1–16 固定。总带宽由段并发决定，任务多则均摊</span>
           </div>
           <div className="form-row">
             <label>ffmpeg</label>

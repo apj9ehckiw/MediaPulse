@@ -94,7 +94,10 @@ export interface AppConfig {
   authors: AuthorConfig[]
   intervalSec: number
   listType: number
+  /** 单任务段下载并发（1–512） */
   workers: number
+  /** 同时下载的视频任务数；0 = 自动（workers/2 夹 1–4），可设 1–16 */
+  maxConcurrentTasks?: number
   autoDownload: boolean
   /** 自动下载仅限发布时间在该日期（YYYY-MM-DD，含当天之后）之后的帖子；空 = 不限制 */
   autoDownloadAfter?: string

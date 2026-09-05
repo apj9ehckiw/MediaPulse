@@ -723,17 +723,18 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	has := cfg.Password != ""
 	cfg.Password = ""
 	writeJSON(w, map[string]any{
-		"apiBase":             cfg.APIBase,
-		"authors":             cfg.Authors,
-		"intervalSec":         cfg.Interval,
-		"listType":            cfg.ListType,
-		"workers":             cfg.Workers,
-		"autoDownload":        cfg.AutoDownload,
-		"autoDownloadAfter":   cfg.AutoDownloadAfter,
-		"githubProxy":         cfg.GitHubProxy,
-		"ffmpegAutoInstall":   cfg.FFmpegAutoInstall,
-		"hasPassword":         has,
-		"authDisabled":        cfg.AuthDisabled,
+		"apiBase":              cfg.APIBase,
+		"authors":              cfg.Authors,
+		"intervalSec":          cfg.Interval,
+		"listType":             cfg.ListType,
+		"workers":              cfg.Workers,
+		"maxConcurrentTasks":   cfg.MaxConcurrentTasks,
+		"autoDownload":         cfg.AutoDownload,
+		"autoDownloadAfter":    cfg.AutoDownloadAfter,
+		"githubProxy":          cfg.GitHubProxy,
+		"ffmpegAutoInstall":    cfg.FFmpegAutoInstall,
+		"hasPassword":          has,
+		"authDisabled":         cfg.AuthDisabled,
 	})
 }
 
@@ -811,17 +812,18 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	authOff := updated.AuthDisabled
 	updated.Password = ""
 	writeJSON(w, map[string]any{
-		"apiBase":           updated.APIBase,
-		"authors":           updated.Authors,
-		"intervalSec":       updated.Interval,
-		"listType":          updated.ListType,
-		"workers":           updated.Workers,
-		"autoDownload":      updated.AutoDownload,
-		"autoDownloadAfter": updated.AutoDownloadAfter,
-		"githubProxy":       updated.GitHubProxy,
-		"ffmpegAutoInstall": updated.FFmpegAutoInstall,
-		"hasPassword":       has,
-		"authDisabled":      authOff,
+		"apiBase":             updated.APIBase,
+		"authors":             updated.Authors,
+		"intervalSec":         updated.Interval,
+		"listType":            updated.ListType,
+		"workers":             updated.Workers,
+		"maxConcurrentTasks":  updated.MaxConcurrentTasks,
+		"autoDownload":        updated.AutoDownload,
+		"autoDownloadAfter":   updated.AutoDownloadAfter,
+		"githubProxy":         updated.GitHubProxy,
+		"ffmpegAutoInstall":   updated.FFmpegAutoInstall,
+		"hasPassword":         has,
+		"authDisabled":        authOff,
 	})
 }
 

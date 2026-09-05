@@ -24,8 +24,10 @@ type Config struct {
 	Authors      []AuthorConfig `json:"authors"`
 	Interval     int            `json:"intervalSec"`    // 轮询间隔秒，0=不自动
 	ListType     int            `json:"listType"`       // 0=全部 1=最新 3=精华
-	Workers      int            `json:"workers"`        // 段下载并发
-	AutoDownload bool           `json:"autoDownload"`   // false=仅发现记录，需手动下载（默认）
+	Workers      int            `json:"workers"`        // 段下载并发（单任务同时在飞的段数）
+	// 同时下载的视频任务数：0 = 自动（workers/2 夹 1–4）；可设 1–16 手动固定。
+	MaxConcurrentTasks int  `json:"maxConcurrentTasks,omitempty"`
+	AutoDownload       bool `json:"autoDownload"`   // false=仅发现记录，需手动下载（默认）
 	// 自动下载的发布时间下限：仅自动下载发布时间在该日期 00:00 之后的帖子。
 	// 空 = 不限制（所有新发现的视频都自动下载）。
 	// 手动「发现」页下载不受此限制。
@@ -126,9 +128,16 @@ func validate(c *Config) error {
 	if c.Workers <= 0 {
 		c.Workers = 8
 	}
-	// 上限 256：视频 CDN 单连接限速约 1.3Mbps，高并发（96+）才能吃满带宽
-	if c.Workers > 256 {
-		c.Workers = 256
+	// 上限 512：视频 CDN 单连接限速约 1.3Mbps，高并发（96+）才能吃满带宽
+	if c.Workers > 512 {
+		c.Workers = 512
+	}
+	// 同时下载任务数：0 = 自动（workers/2 夹 1–4），可设 1–16 固定
+	if c.MaxConcurrentTasks < 0 {
+		c.MaxConcurrentTasks = 0
+	}
+	if c.MaxConcurrentTasks > 16 {
+		c.MaxConcurrentTasks = 16
 	}
 	if c.Interval < 0 {
 		c.Interval = 0

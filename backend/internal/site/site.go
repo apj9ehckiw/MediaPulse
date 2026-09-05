@@ -101,8 +101,8 @@ func New(base string) *Client {
 		HTTP: &http.Client{
 			Timeout: 60 * time.Second,
 			Transport: &http.Transport{
-				MaxIdleConns:        512,
-				MaxIdleConnsPerHost: 512, // 段下载高并发复用连接（workers 可到 256，多任务并发更高）
+				MaxIdleConns:        1024,
+				MaxIdleConnsPerHost: 1024, // 段下载高并发复用连接（workers 可到 512，多任务并发更高）
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},

@@ -909,11 +909,15 @@ func (m *Monitor) triggerDL() {
 	}
 }
 
-// dlConcurrency 同时下载的视频任务数（配置 workers 取半，最低 1 最高 4：
-// 单视频内部已是段级高并发，多视频并发主要用于多作者追更时不再串行等待）
+// dlConcurrency 同时下载的视频任务数。
+// 配置 maxConcurrentTasks=0（默认）时自动：workers/2 夹 1–4；
+// 设置 1–16 时固定使用配置值。
 func (m *Monitor) dlConcurrency() int {
-	w := m.store.Get().Workers
-	n := w / 2
+	cfg := m.store.Get()
+	if cfg.MaxConcurrentTasks > 0 {
+		return cfg.MaxConcurrentTasks
+	}
+	n := cfg.Workers / 2
 	if n < 1 {
 		n = 1
 	}
