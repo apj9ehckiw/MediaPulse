@@ -205,14 +205,16 @@ func (m *Monitor) Run() {
 			}
 		}
 	}()
-	// 下载队列：checkAll 与手动下载统一经此执行
+	// 下载队列：checkAll 与手动下载统一经此执行。
+	// 每次唤醒独立起一轮 drainQueue（多轮可并行）：逐个点击下载时每笔
+	// 立即调度，不必等上一轮结束；并发上限由 claimTask 的锁内计数保证
 	go func() {
 		for {
 			select {
 			case <-m.stopCh:
 				return
 			case <-m.dlWake:
-				m.drainQueue()
+				go m.drainQueue()
 			}
 		}
 	}()
@@ -927,48 +929,53 @@ func (m *Monitor) dlConcurrency() int {
 	return n
 }
 
-// drainQueue 从队列取 pending 任务，交给并发 worker 池执行。
-// 每轮唤醒启动一批 worker，全部任务完成后返回（下轮唤醒再启动）。
+// dlInFlight 当前正在下载（含解析中）的任务数（跨 drainQueue 轮次共享的并发闸门）。
+var dlInFlight int
+
+// drainQueue 从队列取 pending 任务执行。
+// 可多轮并行（每次入队各起一轮）：领取任务前先检查全局在飞数，
+// 达到 dlConcurrency 上限时等待在飞任务完成（而非空转），
+// 保证逐个点击与批量勾选下载的并发行为一致。
 func (m *Monitor) drainQueue() {
-	workers := m.dlConcurrency()
-	var wg sync.WaitGroup
-	for w := 0; w < workers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				select {
-				case <-m.stopCh:
-					return
-				default:
-				}
-				m.mu.Lock()
-				var t *Task
-				for _, task := range m.queue {
-					if task.Status == StatusPending {
-						t = task
-						break
-					}
-				}
-				if t != nil {
-					t.Status = StatusResolving // 立即占位，防止其他 worker 重复领取
-				}
-				m.mu.Unlock()
-				if t == nil {
-					return
-				}
-				if err := m.downloadOne(t); err != nil {
-					// 取消的任务不写失败历史（downloadOne 已置 canceled 状态）
-					if !errors.Is(err, errTaskCanceled) {
-						m.addHistory(taskTopic(*t), "", 0, statusOf(err), err.Error())
-						m.emit("error", "帖子 %d 失败: %v", t.TopicID, err)
-					}
-				}
-				time.Sleep(300 * time.Millisecond)
+	for {
+		select {
+		case <-m.stopCh:
+			return
+		default:
+		}
+		m.mu.Lock()
+		if dlInFlight >= m.dlConcurrency() {
+			m.mu.Unlock()
+			time.Sleep(200 * time.Millisecond) // 并发已满：等在飞任务完成再领
+			continue
+		}
+		var t *Task
+		for _, task := range m.queue {
+			if task.Status == StatusPending {
+				t = task
+				break
 			}
-		}()
+		}
+		if t != nil {
+			t.Status = StatusResolving // 立即占位，防止其他 worker 重复领取
+			dlInFlight++
+		}
+		m.mu.Unlock()
+		if t == nil {
+			return
+		}
+		if err := m.downloadOne(t); err != nil {
+			// 取消的任务不写失败历史（downloadOne 已置 canceled 状态）
+			if !errors.Is(err, errTaskCanceled) {
+				m.addHistory(taskTopic(*t), "", 0, statusOf(err), err.Error())
+				m.emit("error", "帖子 %d 失败: %v", t.TopicID, err)
+			}
+		}
+		m.mu.Lock()
+		dlInFlight--
+		m.mu.Unlock()
+		time.Sleep(300 * time.Millisecond)
 	}
-	wg.Wait()
 }
 
 // errTaskCanceled 任务被用户取消（区分于失败：不写失败历史）。
