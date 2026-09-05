@@ -358,6 +358,17 @@ export async function setAuthorEnabled(uid: number, enabled: boolean): Promise<{
   return r.json()
 }
 
+/** 修改作者昵称：全站展示与视频归档文件夹随之更新，已下载视频自动移动到新文件夹 */
+export async function renameAuthor(uid: number, note: string): Promise<{ uid: number; name: string }> {
+  const r = await fetch('/api/authors/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uid, note }),
+  })
+  if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`)
+  return r.json()
+}
+
 export async function removeAuthorRemote(uid: number, deleteVideos = false, deleteRecords = false): Promise<void> {
   const r = await fetch('/api/authors/remove', {
     method: 'POST',

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { addAuthorRemote, removeAuthorRemote, setAuthorEnabled, AuthorStat, Snapshot } from '../api'
+import { useEffect, useRef, useState } from 'react'
+import { addAuthorRemote, removeAuthorRemote, renameAuthor, setAuthorEnabled, AuthorStat, Snapshot } from '../api'
 import { IconClose, IconPlus, IconUsers } from '../icons'
 import { EmptyState } from './common'
 
@@ -15,6 +15,7 @@ export default function Authors({ snapshot, onRefresh }: Props) {
   const [busyUid, setBusyUid] = useState<number | null>(null)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [removing, setRemoving] = useState<AuthorStat | null>(null)
+  const [renaming, setRenaming] = useState<AuthorStat | null>(null)
 
   const submit = async () => {
     const uid = Number(uidText.trim())
@@ -139,6 +140,14 @@ export default function Authors({ snapshot, onRefresh }: Props) {
                 </div>
                 <div className="a-actions">
                   <button
+                    className="btn ghost rename-btn"
+                    onClick={() => setRenaming(a)}
+                    disabled={busyUid === a.uid}
+                    title="修改作者昵称（视频归档文件夹随之更名）"
+                  >
+                    改名
+                  </button>
+                  <button
                     className="btn ghost danger-ghost remove-wipe"
                     onClick={() => setRemoving(a)}
                     disabled={busyUid === a.uid}
@@ -164,6 +173,18 @@ export default function Authors({ snapshot, onRefresh }: Props) {
           onClose={() => setRemoving(null)}
           onDone={(text) => {
             setRemoving(null)
+            setMsg({ ok: true, text })
+            onRefresh()
+          }}
+        />
+      )}
+
+      {renaming && (
+        <RenameDialog
+          author={renaming}
+          onClose={() => setRenaming(null)}
+          onDone={(text) => {
+            setRenaming(null)
             setMsg({ ok: true, text })
             onRefresh()
           }}
@@ -245,6 +266,96 @@ function RemoveDialog({ author, onClose, onDone }: {
             disabled={busy}
           >
             {busy ? '删除中...' : '确认删除'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** 改名对话框：修改作者昵称，已下载视频自动迁移到新昵称文件夹 */
+function RenameDialog({ author, onClose, onDone }: {
+  author: AuthorStat
+  onClose: () => void
+  onDone: (msg: string) => void
+}) {
+  const [note, setNote] = useState(author.note || String(author.uid))
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [])
+
+  const confirm = async () => {
+    if (busy) return
+    const trimmed = note.trim()
+    if (!trimmed) {
+      setErr('昵称不能为空')
+      return
+    }
+    if ([...trimmed].length > 40) {
+      setErr('昵称过长（最多 40 字）')
+      return
+    }
+    if (trimmed === (author.note || '')) {
+      onClose()
+      return
+    }
+    setBusy(true)
+    setErr('')
+    try {
+      await renameAuthor(author.uid, trimmed)
+      onDone(author.downloaded > 0
+        ? `已改名「${trimmed}」，${author.downloaded} 个已下载视频已移动到新文件夹`
+        : `已改名「${trimmed}」`)
+    } catch (e) {
+      setErr(String(e).replace(/^Error:\s*/, ''))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={busy ? undefined : onClose}>
+      <div className="modal-box remove-box" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <span className="t">修改作者昵称（UID {author.uid}）</span>
+          <button className="btn ghost icon-only" onClick={onClose} disabled={busy} title="关闭">
+            <IconClose size={14} />
+          </button>
+        </div>
+        <div className="remove-body">
+          <div className="remove-tip">
+            昵称用于全站展示（任务 / 视频库 / 记录 / 日志）与视频归档路径。
+            {author.downloaded > 0 && (
+              <>
+                {' '}该作者已有 <b>{author.downloaded}</b> 个已下载视频，
+                改名后文件会自动移动到 <code>videos/{'{新昵称}'}/</code> 文件夹并同步更名。
+              </>
+            )}
+          </div>
+          <input
+            ref={inputRef}
+            className="input"
+            type="text"
+            value={note}
+            maxLength={60}
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !busy) confirm()
+              if (e.key === 'Escape' && !busy) onClose()
+            }}
+            aria-label="新昵称"
+            disabled={busy}
+          />
+          {err && <div className="add-msg err" role="alert">{err}</div>}
+        </div>
+        <div className="modal-foot remove-foot">
+          <button className="btn ghost" onClick={onClose} disabled={busy}>取消</button>
+          <button className="btn primary" onClick={confirm} disabled={busy}>
+            {busy ? '改名中...' : '确认改名'}
           </button>
         </div>
       </div>

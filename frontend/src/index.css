@@ -892,6 +892,8 @@ select.input { cursor: pointer; }
 /* 作者行删除操作组 */
 .a-actions { display: flex; gap: 7px; flex-shrink: 0; }
 .author-card-row .a-actions .btn { padding: 6px 13px; font-size: 11.5px; border-radius: var(--r-sm); }
+/* 改名按钮：与删除按钮区分（默认描边色，不用红色） */
+.a-actions .rename-btn:hover:not(:disabled) { color: var(--accent); border-color: var(--border-focus); background: var(--accent-dim); }
 
 /* 检查中的作者：名字旁徽标 + 旋转点 */
 .a-checking {

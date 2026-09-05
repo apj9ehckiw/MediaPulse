@@ -1188,6 +1188,143 @@ func (m *Monitor) SetAuthorEnabled(uid int64, enabled bool) (config.AuthorConfig
 	return config.AuthorConfig{}, fmt.Errorf("作者 %d 不存在", uid)
 }
 
+// SetAuthorNote 自定义修改作者昵称（网页端「作者」页）。
+// 昵称用于全站展示与视频归档（videos/<昵称>/<标题-昵称>.mp4）；
+// 修改后已下载的视频文件会移动到新昵称文件夹（含重命名为「标题-新昵称」），
+// state.json 的文件路径同步更新，进行中任务不受影响（文件落盘时取最新昵称）。
+func (m *Monitor) SetAuthorNote(uid int64, note string) (config.AuthorConfig, error) {
+	note = strings.TrimSpace(note)
+	if note == "" {
+		return config.AuthorConfig{}, errors.New("昵称不能为空")
+	}
+	// 与配置提交同款乱码防护：非 UTF-8 输入（如 Windows curl 直传中文）会产出 U+FFFD
+	if strings.ContainsRune(note, 0xFFFD) {
+		return config.AuthorConfig{}, errors.New("昵称包含乱码（非 UTF-8 输入），请通过网页端修改")
+	}
+	if r := []rune(note); len(r) > 40 {
+		return config.AuthorConfig{}, errors.New("昵称过长（最多 40 字）")
+	}
+	cfg := m.store.Get()
+	found := false
+	oldName := ""
+	for i := range cfg.Authors {
+		if cfg.Authors[i].UID == uid {
+			if cfg.Authors[i].Note == note {
+				// 未变化：直接返回，不动文件
+				return cfg.Authors[i], nil
+			}
+			oldName = cfg.Authors[i].Note
+			cfg.Authors[i].Note = note
+			found = true
+			break
+		}
+	}
+	if !found {
+		return config.AuthorConfig{}, fmt.Errorf("作者 %d 不存在", uid)
+	}
+	updated, err := m.store.Update(cfg)
+	if err != nil {
+		return config.AuthorConfig{}, err
+	}
+
+	// 已下载文件迁移到新昵称文件夹：videos/<旧>/ → videos/<新>/，
+	// 文件名里的「-旧昵称」后缀同步替换为「-新昵称」，state.json 路径随之更新。
+	moved, _ := m.moveAuthorFiles(uid, note)
+	var newAuthor config.AuthorConfig
+	for _, a := range updated.Authors {
+		if a.UID == uid {
+			newAuthor = a
+			break
+		}
+	}
+	if oldName == "" {
+		oldName = strconv.FormatInt(uid, 10)
+	}
+	if moved > 0 {
+		m.emit("ok", "已修改作者昵称 %s → %s，移动 %d 个视频到新文件夹", oldName, note, moved)
+	} else {
+		m.emit("ok", "已修改作者昵称 %s → %s（暂无已下载视频需移动）", oldName, note)
+	}
+	return newAuthor, nil
+}
+
+// moveAuthorFiles 把某作者已下载的视频文件迁移到新昵称文件夹并更新记录。
+// 返回移动的文件数。锁外执行文件 IO（m.mu 只保护状态表）。
+func (m *Monitor) moveAuthorFiles(uid int64, newNote string) (moved int, err error) {
+	type moveItem struct {
+		topicID int64
+		src     string // 相对 videos/（正斜杠）
+		dst     string
+	}
+	var items []moveItem
+
+	m.mu.Lock()
+	for tid, rec := range m.state.Topics {
+		if rec.AuthorUID != uid {
+			continue
+		}
+		oldRel := rec.File // 形如 <旧文件夹>/<文件名>.mp4
+		if oldRel == "" {
+			continue
+		}
+		oldDir, fname := filepath.Split(filepath.ToSlash(oldRel))
+		oldDir = strings.TrimSuffix(oldDir, "/")
+		// 文件名形如 <标题>-<旧昵称>.mp4：替换末尾作者段为新昵称
+		ext := filepath.Ext(fname)
+		stem := strings.TrimSuffix(fname, ext)
+		newStem := stem
+		if i := strings.LastIndex(stem, "-"); i > 0 {
+			newStem = stem[:i] + "-" + safeName(newNote, 40)
+		}
+		newDir := safeName(newNote, 40)
+		// 同名冲突时追加帖子 ID（与 downloadOne 的规则一致）
+		dst := newDir + "/" + newStem + ext
+		if _, err := os.Stat(filepath.Join(m.paths.OutDir, filepath.FromSlash(dst))); err == nil && oldRel != dst {
+			dst = fmt.Sprintf("%s/%s_%d%s", newDir, newStem, tid, ext)
+		}
+		if oldRel == dst {
+			continue
+		}
+		items = append(items, moveItem{topicID: tid, src: oldRel, dst: dst})
+	}
+	m.mu.Unlock()
+
+	for _, it := range items {
+		srcPath := filepath.Join(m.paths.OutDir, filepath.FromSlash(it.src))
+		dstPath := filepath.Join(m.paths.OutDir, filepath.FromSlash(it.dst))
+		if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+			continue
+		}
+		if _, err := os.Stat(srcPath); err != nil {
+			// 源文件缺失（被手动删除）：仅更新记录路径，不报错
+		} else if err := os.Rename(srcPath, dstPath); err != nil {
+			continue
+		} else {
+			moved++
+		}
+		m.mu.Lock()
+		if rec, ok := m.state.Topics[it.topicID]; ok {
+			rec.File = it.dst
+			m.state.Topics[it.topicID] = rec
+		}
+		m.mu.Unlock()
+	}
+	if len(items) > 0 {
+		m.mu.Lock()
+		m.saveState()
+		m.mu.Unlock()
+		// 旧昵称文件夹空了就删掉（取第一个待迁移项的顶层目录名）
+		oldDirName := filepath.ToSlash(items[0].src)
+		if i := strings.Index(oldDirName, "/"); i > 0 {
+			oldDir := filepath.Join(m.paths.OutDir, filepath.FromSlash(oldDirName[:i]))
+			if entries, err := os.ReadDir(oldDir); err == nil && len(entries) == 0 {
+				_ = os.Remove(oldDir)
+			}
+		}
+	}
+	return moved, nil
+}
+
 // RemoveAuthor 删除作者。
 // deleteVideos=true：删除该作者的视频文件（videos/<作者名>/ 整个目录）；
 // deleteRecords=true：删除下载去重记录、发现记录、下载流水。

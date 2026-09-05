@@ -111,6 +111,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/discovered/dismiss", s.handleDismissDiscovered)
 	mux.HandleFunc("POST /api/authors/add", s.handleAddAuthor)
 	mux.HandleFunc("POST /api/authors/enable", s.handleAuthorEnable)
+	mux.HandleFunc("POST /api/authors/rename", s.handleAuthorRename)
 	mux.HandleFunc("POST /api/authors/remove", s.handleAuthorRemove)
 	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
@@ -1128,6 +1129,25 @@ func (s *Server) handleAuthorEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a, err := s.mon.SetAuthorEnabled(req.UID, req.Enabled)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "uid": a.UID, "name": a.Note, "enabled": a.Enabled})
+}
+
+// handleAuthorRename 自定义修改作者昵称。
+// 昵称用于全站展示与视频归档；已下载视频自动移动到新昵称文件夹（见 Monitor.SetAuthorNote）。
+func (s *Server) handleAuthorRename(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UID  int64  `json:"uid"`
+		Note string `json:"note"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	a, err := s.mon.SetAuthorNote(req.UID, req.Note)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
