@@ -286,12 +286,17 @@ func (m *Monitor) Snapshot() Snapshot {
 	for i, j := 0, len(tasks)-1; i < j; i, j = i+1, j-1 {
 		tasks[i], tasks[j] = tasks[j], tasks[i]
 	}
-	// 任务展示名：优先配置备注（锁内用已取出的 cfg 映射，避免嵌套加锁）
+	// 任务展示名：配置备注 → 昵称缓存（自定义下载的非监控作者）→ UID。
+	// 锁内先取两个映射（避免嵌套加锁）。
+	nickCache := m.state.AuthorNames
 	nameOf := func(uid int64) string {
 		for _, a := range cfg.Authors {
 			if a.UID == uid && a.Note != "" {
 				return a.Note
 			}
+		}
+		if n, ok := nickCache[uid]; ok && n != "" {
+			return n
 		}
 		return strconv.FormatInt(uid, 10)
 	}
