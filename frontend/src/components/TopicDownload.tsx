@@ -16,7 +16,7 @@ export default function TopicDownload({ onEnqueued }: Props) {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
 
-  // 输入预览：估算解析出的条目数（与后端解析规则一致：数字或含 /topic/<id> 的 URL）
+  // 输入预览：估算解析出的条目数（与后端解析规则一致：数字或含 /topic(s)/<id> 的 URL）
   const parsedCount = useMemo(() => {
     const toks = input.split(/[\n\r\t ,，;]+/).map((s) => s.trim()).filter(Boolean)
     const seen = new Set<number>()
@@ -26,7 +26,7 @@ export default function TopicDownload({ onEnqueued }: Props) {
       if (/^\d+$/.test(tok)) {
         id = Number(tok)
       } else {
-        const m = tok.match(/\/(?:topic|t)\/(\d+)/)
+        const m = tok.match(/\/(?:topics?|t)\/(\d+)/)
         if (m) id = Number(m[1])
       }
       if (id > 0) seen.add(id)
@@ -84,7 +84,7 @@ export default function TopicDownload({ onEnqueued }: Props) {
               '每行一个，也支持空格 / 逗号分隔：\n'
               + '2096629\n'
               + 'https://example.com/topic/2180219\n'
-              + '2180219, 2178519'
+              + 'https://haijiao.ai/topics/727618'
             }
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -107,9 +107,9 @@ export default function TopicDownload({ onEnqueued }: Props) {
             </div>
           )}
           <div className="hint">
-            输入帖子 URL（形如 https://站点/topic/2096629）或直接帖子 ID，程序会逐个拉取详情：
-            确认带视频后创建下载任务（无需先监控该作者）；已下载/队列中的自动跳过，
-            无视频附件的会提示。下载进度见「概览」页任务队列。
+            输入帖子 URL（形如 https://站点/topic/2096629 或 https://haijiao.ai/topics/727618）
+            或直接帖子 ID，程序会逐个拉取详情：确认带视频后创建下载任务（无需先监控该作者）；
+            已下载/队列中的自动跳过，无视频附件的会提示。下载进度见「任务」页。
           </div>
         </div>
       </div>

@@ -85,6 +85,9 @@ type persistedState struct {
 	// 每作者最近一次完成检查的时间（"2006-01-02 15:04:05"），重启后恢复：
 	// 启动扫描只查到期（lastCheck+interval 已过）的作者，避免每次重启全量重扫
 	LastChecks map[int64]string `json:"lastChecks,omitempty"`
+	// 未监控作者的昵称缓存（自定义下载时从帖子详情获取）：uid -> 昵称。
+	// 让任务队列显示与归档文件夹用真实昵称而非 UID
+	AuthorNames map[int64]string `json:"authorNames,omitempty"`
 }
 
 // Snapshot 当前状态快照（API 用）。
@@ -252,6 +255,9 @@ func (m *Monitor) loadState() {
 		}
 		if st.LastChecks == nil {
 			st.LastChecks = map[int64]string{}
+		}
+		if st.AuthorNames == nil {
+			st.AuthorNames = map[int64]string{}
 		}
 		m.state = st
 		// 恢复每作者最近检查时间（内存 lastCheck），启动扫描据此判断是否到期
@@ -980,14 +986,48 @@ func (m *Monitor) ensureAuthorNote(uid int64, nick string) {
 	}
 }
 
-// authorName 下载命名用：优先配置备注，缺省用 UID 数字。
+// authorName 下载命名用：优先配置备注（监控作者），
+// 其次未监控作者昵称缓存（自定义下载时从详情获取），缺省用 UID 数字。
 func (m *Monitor) authorName(uid int64) string {
 	for _, a := range m.store.Get().Authors {
 		if a.UID == uid && a.Note != "" {
 			return a.Note
 		}
 	}
+	m.mu.Lock()
+	nick, ok := m.state.AuthorNames[uid]
+	m.mu.Unlock()
+	if ok && nick != "" {
+		return nick
+	}
 	return strconv.FormatInt(uid, 10)
+}
+
+// AuthorDisplayName 作者展示名（API 层用）：配置备注 → 昵称缓存 → UID。
+func (m *Monitor) AuthorDisplayName(uid int64) string {
+	return m.authorName(uid)
+}
+
+// rememberAuthorName 记住未监控作者的昵称（自定义下载场景）。
+// 已是监控作者的跳过（配置备注优先）；昵称含乱码不记录。
+func (m *Monitor) rememberAuthorName(uid int64, nick string) {
+	if uid <= 0 || nick == "" || strings.ContainsRune(nick, 0xFFFD) {
+		return
+	}
+	for _, a := range m.store.Get().Authors {
+		if a.UID == uid {
+			return // 监控作者：配置备注优先，不覆盖
+		}
+	}
+	m.mu.Lock()
+	if m.state.AuthorNames == nil {
+		m.state.AuthorNames = map[int64]string{}
+	}
+	if cur, ok := m.state.AuthorNames[uid]; !ok || cur == "" {
+		m.state.AuthorNames[uid] = nick
+		m.saveState()
+	}
+	m.mu.Unlock()
 }
 
 // AddAuthor 自动获取名字并添加作者（幂等：已存在直接返回）。
@@ -1306,7 +1346,7 @@ func (m *Monitor) EnqueueTopics(ids []int64) (enqueued, skipped int) {
 		}
 		m.mu.Unlock()
 
-		// 拉详情补齐信息（标题/作者/时间）
+		// 拉详情补齐信息（标题/作者/时间）；作者昵称记住（未监控作者显示真实昵称）
 		detail, err := m.client.Detail(id)
 		if err != nil {
 			m.emit("error", "帖子 %d 详情获取失败: %v", id, err)
@@ -1317,6 +1357,9 @@ func (m *Monitor) EnqueueTopics(ids []int64) (enqueued, skipped int) {
 			m.emit("dim", "帖子 %d 无视频附件，跳过", id)
 			skipped++
 			continue
+		}
+		if detail.User.ID > 0 && detail.User.Nickname != "" {
+			m.rememberAuthorName(detail.User.ID, detail.User.Nickname)
 		}
 
 		m.mu.Lock()

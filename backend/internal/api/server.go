@@ -645,7 +645,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleDownloads 下载记录列表（最新在前），附作者名字（配置备注，缺失时回退 UID）。
+// handleDownloads 下载记录列表（最新在前），附作者名字（配置备注 → 昵称缓存 → UID）。
 func (s *Server) handleDownloads(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	rows := s.hist.List(limit)
@@ -655,6 +655,9 @@ func (s *Server) handleDownloads(w http.ResponseWriter, r *http.Request) {
 			if a.UID == uid && a.Note != "" {
 				return a.Note
 			}
+		}
+		if n := s.mon.AuthorDisplayName(uid); n != strconv.FormatInt(uid, 10) {
+			return n
 		}
 		return ""
 	}
@@ -802,7 +805,7 @@ func (s *Server) handleDownloadTopics(w http.ResponseWriter, r *http.Request) {
 }
 
 // parseTopicInput 从用户输入解析帖子 ID 列表。
-// 支持：换行/空格/逗号分隔；纯数字 = ID；URL 取路径中的 topic/<id>。
+// 支持：换行/空格/逗号分隔；纯数字 = ID；URL 取路径中的 topic/<id>（含 /topics/、/t/ 复数形式）。
 // 返回去重后的 ID 与无法解析的原始片段数。
 func parseTopicInput(input string) ([]int64, int) {
 	var ids []int64
@@ -819,10 +822,10 @@ func parseTopicInput(input string) ([]int64, int) {
 		if n, err := strconv.ParseInt(tok, 10, 64); err == nil {
 			id = n
 		} else if u, err := url.Parse(tok); err == nil {
-			// 形如 /topic/<id> 或 /topic/<id>?x=1 或 /t/<id>
+			// 形如 /topic/<id>、/topics/<id>、/t/<id>（可带查询串）
 			parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 			for i, p := range parts {
-				if (p == "topic" || p == "t") && i+1 < len(parts) {
+				if (p == "topic" || p == "topics" || p == "t") && i+1 < len(parts) {
 					if n, err := strconv.ParseInt(parts[i+1], 10, 64); err == nil {
 						id = n
 					}
@@ -942,12 +945,15 @@ type videoInfo struct {
 
 func (s *Server) handleVideos(w http.ResponseWriter, r *http.Request) {
 	snap := s.mon.Snapshot()
-	// 作者展示名：优先配置备注（下载记录里的作者可能已被删除，回退 UID）
+	// 作者展示名：配置备注 → 昵称缓存（自定义下载的非监控作者）→ UID
 	nameOf := func(uid int64) string {
 		for _, a := range snap.Authors {
 			if a.UID == uid && a.Note != "" {
 				return a.Note
 			}
+		}
+		if n := s.mon.AuthorDisplayName(uid); n != strconv.FormatInt(uid, 10) {
+			return n
 		}
 		return strconv.FormatInt(uid, 10)
 	}
