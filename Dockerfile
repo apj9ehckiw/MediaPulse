@@ -12,7 +12,8 @@ COPY frontend/ ./
 RUN npm run build -- --outDir /dist --emptyOutDir
 
 # ---------- 阶段 2: Go 构建 ----------
-FROM golang:1.23-alpine AS backend
+# go.mod 要求 go >= 1.26（容器镜像版本与之保持一致）
+FROM golang:1.26-alpine AS backend
 WORKDIR /src
 # 先放一个占位 index.html 保证 go:embed 可编译，再用真实产物覆盖
 RUN mkdir -p backend/web/dist && echo placeholder > backend/web/dist/index.html
