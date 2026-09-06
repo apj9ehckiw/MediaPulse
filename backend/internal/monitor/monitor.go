@@ -10,9 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/apj9ehckiw/mediapulse/backend/internal/config"
@@ -137,8 +139,6 @@ type Monitor struct {
 	store *config.Store
 
 	mu       sync.Mutex
-	client   *site.Client
-	dl       *downloader.Downloader
 	state    persistedState
 	queue    []*Task
 	tasks    map[int64]*Task
@@ -159,16 +159,45 @@ type Monitor struct {
 	// 任务取消信号：topicID -> cancel 函数（下载中/解析中的任务）
 	cancels map[int64]context.CancelFunc
 
+	// 站点客户端与下载器：atomic 指针，读写都无锁。
+	// 原实现 client/dl 是普通字段——配置变更（改基址/并发）持 m.mu 替换，
+	// 而下载 goroutine 无锁读：data race 读到撕裂结构体（如 HTTP=nil）
+	// → nil deref panic → panic 展开时若恰在持锁代码段内，锁永不释放
+	// → Snapshot/emit/drainQueue 全部卡死（表现为 /api/status 等挂起、
+	// 页面骨架屏永远转）。atomic.Pointer 根治：替换原子可见、读取永不撕裂。
+	clientP atomic.Pointer[site.Client]
+	dlP     atomic.Pointer[downloader.Downloader]
+
 	hist *history.Store
+}
+
+// client 返回当前站点客户端（原子读，任何 goroutine 安全调用）。
+func (m *Monitor) client() *site.Client { return m.clientP.Load() }
+
+// dl 返回当前下载器（原子读）。
+func (m *Monitor) dl() *downloader.Downloader { return m.dlP.Load() }
+
+// replaceClient 配置的站点基址变更时原子替换客户端。
+func (m *Monitor) replaceClient(base string) {
+	m.clientP.Store(site.New(base))
 }
 
 // New 创建监控器。
 func New(store *config.Store, paths Paths, hist *history.Store) *Monitor {
 	m := &Monitor{
-		paths:     paths,
-		store:     store,
-		client:    site.New(store.Get().APIBase),
-		state:     persistedState{Topics: map[int64]DownloadedRecord{}, Discovered: map[int64]DiscoveredRecord{}},
+		paths: paths,
+		store: store,
+		// 全部 map 都要初始化：全新部署 state.json 不存在时 loadState 直接
+		// 返回，state 保持这里的初始值——LastChecks 若为 nil，首次
+		// checkAuthor 写入会 panic（assignment to entry in nil map），
+		// panic 落在持锁段内且 defer 里再次 Lock → 重入死锁拖死整个监控器
+		// （线上 v1.8.2 Docker 新部署即触发：/api/status 永久挂起）。
+		state: persistedState{
+			Topics:      map[int64]DownloadedRecord{},
+			Discovered:  map[int64]DiscoveredRecord{},
+			LastChecks:  map[int64]string{},
+			AuthorNames: map[int64]string{},
+		},
 		tasks:     map[int64]*Task{},
 		wake:      make(chan struct{}, 1),
 		dlWake:    make(chan struct{}, 1),
@@ -178,8 +207,9 @@ func New(store *config.Store, paths Paths, hist *history.Store) *Monitor {
 		cancels:   map[int64]context.CancelFunc{},
 		hist:      hist,
 	}
+	m.clientP.Store(site.New(store.Get().APIBase))
 	cfg := store.Get()
-	m.dl = downloader.New(m.client, cfg.Workers)
+	m.dlP.Store(downloader.New(m.client(), cfg.Workers))
 	// 数据目录 bin/ 下的 ffmpeg（remux 兜底查找用）
 	downloader.SetBinDir(filepath.Dir(paths.StateFile))
 	m.loadState()
@@ -262,11 +292,35 @@ func (m *Monitor) loadState() {
 	}
 }
 
+// saveState 落盘 state.json。**调用方必须已持 m.mu**（marshal 在锁内快）。
+// 磁盘写由 stateWriteMu 串行化：磁盘卡顿（杀毒扫描/网络盘）时多次
+// saveState 排队写，不乱序覆盖、也不丢更新。
 func (m *Monitor) saveState() {
 	data, err := json.MarshalIndent(m.state, "", " ")
 	if err != nil {
 		return
 	}
+	stateWriteMu.Lock()
+	defer stateWriteMu.Unlock()
+	_ = os.MkdirAll(filepath.Dir(m.paths.StateFile), 0o755)
+	_ = os.WriteFile(m.paths.StateFile, data, 0o644)
+}
+
+// stateWriteMu 串行化 state.json 的磁盘写。
+var stateWriteMu sync.Mutex
+
+// saveStateLocked 锁外安全落盘：锁内 marshal 出 JSON 字节并解锁，
+// 再串行写盘——磁盘卡顿（杀毒扫描/网络盘）不会拖住监控锁，
+// panic 也不会发生在持锁段内（marshal 后立即解锁，写盘无 panic 路径）。
+func (m *Monitor) saveStateLocked() {
+	m.mu.Lock()
+	data, err := json.MarshalIndent(m.state, "", " ")
+	m.mu.Unlock()
+	if err != nil {
+		return
+	}
+	stateWriteMu.Lock()
+	defer stateWriteMu.Unlock()
 	_ = os.MkdirAll(filepath.Dir(m.paths.StateFile), 0o755)
 	_ = os.WriteFile(m.paths.StateFile, data, 0o644)
 }
@@ -577,14 +631,10 @@ func (m *Monitor) checkDue() {
 	}()
 
 	cfg := m.store.Get()
-	if m.client.Base != cfg.APIBase {
-		m.mu.Lock()
-		m.client = site.New(cfg.APIBase)
-		m.mu.Unlock()
+	if m.client().Base != cfg.APIBase {
+		m.replaceClient(cfg.APIBase)
 	}
-	m.mu.Lock()
-	m.dl = downloader.New(m.client, cfg.Workers)
-	m.mu.Unlock()
+	m.dlP.Store(downloader.New(m.client(), cfg.Workers))
 
 	var due, skipped []config.AuthorConfig
 	for _, a := range cfg.Authors {
@@ -632,15 +682,11 @@ func (m *Monitor) checkAll() {
 	}()
 
 	cfg := m.store.Get()
-	// 应用配置：基址/并发可能被网页端改过
-	if m.client.Base != cfg.APIBase {
-		m.mu.Lock()
-		m.client = site.New(cfg.APIBase)
-		m.mu.Unlock()
+	// 应用配置：基址/并发可能被网页端改过（atomic 替换，下载 goroutine 立即用新客户端）
+	if m.client().Base != cfg.APIBase {
+		m.replaceClient(cfg.APIBase)
 	}
-	m.mu.Lock()
-	m.dl = downloader.New(m.client, cfg.Workers)
-	m.mu.Unlock()
+	m.dlP.Store(downloader.New(m.client(), cfg.Workers))
 
 	// 只检查启用的作者；记录进度供网页端显示
 	var targets []config.AuthorConfig
@@ -666,6 +712,12 @@ func (m *Monitor) checkAll() {
 }
 
 // checkAuthor 检查单个作者。checkingAuthors 维护阶段进度供作者页显示。
+// debugStack 返回当前调用栈（panic 诊断用）。
+func debugStack() []byte {
+	buf := make([]byte, 16<<10)
+	return buf[:runtime.Stack(buf, false)]
+}
+
 func (m *Monitor) checkAuthor(a config.AuthorConfig) {
 	name := m.authorName(a.UID)
 	setChecking := func(info string) {
@@ -679,10 +731,19 @@ func (m *Monitor) checkAuthor(a config.AuthorConfig) {
 		m.mu.Unlock()
 	}
 	defer clearChecking()
+	// 兜底 recover（注册在 clearChecking 之后 = LIFO 先执行）：
+	// 捕获检查路径的任何 panic 并记录，避免 panic 沿栈展开时在
+	// 后续 defer 的 Lock 上死锁、拖死整个监控器。
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[error] 检查作者 %d 时发生内部错误: %v\n%s", a.UID, r, debugStack())
+			m.emit("error", "检查作者 %d 时发生内部错误: %v", a.UID, r)
+		}
+	}()
 
 	setChecking("拉取帖子列表...")
 	m.emit("info", "拉取作者 %s 帖子列表...", name)
-	topics, err := m.client.ListTopics(a.UID, m.store.Get().ListType, func(page, got, total int) {
+	topics, err := m.client().ListTopics(a.UID, m.store.Get().ListType, func(page, got, total int) {
 		setChecking(fmt.Sprintf("拉列表 第 %d 页（已 %d/%d 帖）", page, got, total))
 	})
 	if err != nil {
@@ -695,8 +756,8 @@ func (m *Monitor) checkAuthor(a config.AuthorConfig) {
 	m.mu.Lock()
 	m.lastCheck[a.UID] = time.Now().Format("2006-01-02 15:04:05")
 	m.state.LastChecks[a.UID] = m.lastCheck[a.UID] // 落盘：重启后启动扫描据此跳过
-	m.saveState()
 	m.mu.Unlock()
+	m.saveStateLocked() // 锁内 marshal 快照、锁外写盘（磁盘卡顿不拖监控锁）
 	// 备注为空时用列表自带的 nickname 自动补全（不覆盖用户设置的备注）
 	if nick := authorNickname(topics); nick != "" {
 		m.ensureAuthorNote(a.UID, nick)
@@ -879,9 +940,7 @@ func (m *Monitor) checkAuthor(a config.AuthorConfig) {
 // topicHasVideo 拉取帖子详情确认真的带有视频附件。
 // 详情拉取失败时保守返回 true，交给下载流程兜底判定。
 func (m *Monitor) topicHasVideo(topicID int64) bool {
-	m.mu.Lock()
-	cl := m.client
-	m.mu.Unlock()
+	cl := m.client()
 	detail, err := cl.Detail(topicID)
 	if err != nil {
 		return true
@@ -963,6 +1022,23 @@ func (m *Monitor) drainQueue() {
 			continue
 		}
 		go func(t *Task) {
+			defer func() {
+				// 兜底 recover：下载路径的任何 panic 转为任务失败，
+				// 不让 goroutine panic 拖垮整个进程（或在持锁展开时卡死调度）
+				if r := recover(); r != nil {
+					m.setTask(t.TopicID, func(task *Task) {
+						task.Status = StatusFailed
+						task.Error = fmt.Sprintf("内部错误: %v", r)
+						task.SpeedBps = 0
+					})
+					m.emit("error", "帖子 %d 内部错误: %v", t.TopicID, r)
+				}
+				// 完成释放名额并立即唤醒调度（让下一个 pending 补位）
+				m.mu.Lock()
+				m.dlInFlightN--
+				m.mu.Unlock()
+				m.triggerDL()
+			}()
 			if err := m.downloadOne(t); err != nil {
 				// 取消的任务不写失败历史（downloadOne 已置 canceled 状态）
 				if !errors.Is(err, errTaskCanceled) {
@@ -970,11 +1046,6 @@ func (m *Monitor) drainQueue() {
 					m.emit("error", "帖子 %d 失败: %v", t.TopicID, err)
 				}
 			}
-			// 完成释放名额并立即唤醒调度（让下一个 pending 补位）
-			m.mu.Lock()
-			m.dlInFlightN--
-			m.mu.Unlock()
-			m.triggerDL()
 		}(t)
 	}
 }
@@ -1127,9 +1198,7 @@ func (m *Monitor) AddAuthor(uid int64) (config.AuthorConfig, error) {
 			return a, nil
 		}
 	}
-	m.mu.Lock()
-	cl := m.client
-	m.mu.Unlock()
+	cl := m.client()
 	nick, total, err := cl.AuthorInfo(uid)
 	if err != nil {
 		return config.AuthorConfig{}, fmt.Errorf("获取作者信息失败: %w", err)
@@ -1583,7 +1652,7 @@ func (m *Monitor) EnqueueTopics(ids []int64, onItem func(done, total int, topicI
 		m.mu.Unlock()
 
 		// 拉详情补齐信息（标题/作者/时间）；作者昵称记住（未监控作者显示真实昵称）
-		detail, err := m.client.Detail(id)
+		detail, err := m.client().Detail(id)
 		if err != nil {
 			m.emit("error", "帖子 %d 详情获取失败: %v", id, err)
 			skipped++
@@ -1725,7 +1794,7 @@ func (m *Monitor) downloadOne(t *Task) error {
 
 	m.setTask(topic.TopicID, func(t *Task) { t.Status = StatusResolving })
 
-	detail, err := m.client.Detail(topic.TopicID)
+	detail, err := m.client().Detail(topic.TopicID)
 	if err != nil {
 		if isCanceled(ctx) {
 			m.setTask(topic.TopicID, taskCancelled(topic.TopicID, ctx))
@@ -1746,7 +1815,7 @@ func (m *Monitor) downloadOne(t *Task) error {
 		m.setTask(topic.TopicID, func(t *Task) { t.Status = StatusSkipped; t.Error = "no video attachment" })
 		return errors.New("no video attachment")
 	}
-	full, err := m.client.ResolveFullM3u8(preview)
+	full, err := m.client().ResolveFullM3u8(preview)
 	if err != nil {
 		if isCanceled(ctx) {
 			m.setTask(topic.TopicID, taskCancelled(topic.TopicID, ctx))
@@ -1783,7 +1852,7 @@ func (m *Monitor) downloadOne(t *Task) error {
 	}
 
 	m.setTask(topic.TopicID, func(t *Task) { t.Status = StatusDownloading })
-	err = m.dl.Download(full, outPath, downloader.Options{
+	err = m.dl().Download(full, outPath, downloader.Options{
 		Ctx: ctx,
 		OnProgress: func(p downloader.Progress) {
 			m.setTask(topic.TopicID, func(t *Task) {

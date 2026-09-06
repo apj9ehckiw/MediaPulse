@@ -118,6 +118,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/auth/state", s.handleAuthState)
 	mux.HandleFunc("POST /api/auth/setup", s.handleAuthSetup)
 	mux.HandleFunc("GET /api/ffmpeg", s.handleFFmpegStatus)
+	// 诊断：全量 goroutine 堆栈（排查卡死用；需登录会话）
+	mux.HandleFunc("GET /api/debug/goroutines", s.handleDebugGoroutines)
 	mux.HandleFunc("POST /api/ffmpeg/install", s.handleFFmpegInstall)
 	mux.HandleFunc("GET /api/data/export", s.handleDataExport)
 	mux.HandleFunc("POST /api/data/import", s.handleDataImport)
@@ -647,6 +649,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"version": Version(),
 		"snapshot": snap,
 	})
+}
+
+// handleDebugGoroutines 输出全量 goroutine 堆栈（排查卡死用）。
+func (s *Server) handleDebugGoroutines(w http.ResponseWriter, r *http.Request) {
+	buf := make([]byte, 1<<20)
+	n := runtime.Stack(buf, true)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write(buf[:n])
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

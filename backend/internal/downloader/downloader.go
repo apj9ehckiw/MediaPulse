@@ -302,9 +302,6 @@ func (d *Downloader) Download(m3u8URL, outMP4 string, opt Options) error {
 	if firstErr != nil {
 		return firstErr
 	}
-	elapsed := time.Since(start)
-	_ = elapsed
-	_ = bytesDL
 
 	// 按序写入临时 TS
 	tmpTS := outMP4 + ".ts.tmp"

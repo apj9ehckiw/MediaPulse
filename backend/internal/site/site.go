@@ -90,21 +90,30 @@ var errRateLimited = errors.New("429 rate limited")
 // Client 站点 API 客户端。
 type Client struct {
 	Base  string
-	HTTP  *http.Client
-	Limit int // 列表每页条数（服务端上限 50）
+	HTTP  *http.Client // API 请求（15s 超时）
+	Fetch *http.Client // 资源下载（m3u8/段/key，10 分钟超时）
+	Limit int          // 列表每页条数（服务端上限 50）
 }
 
 // New 创建客户端。
+// API 超时 15s：站点接口本身 <2s；原 60s 在容器内网络不通时一次 get
+// 要 60s×3 重试 ≈ 3 分钟才报错，前端表现为"一直没反应"。
+// 资源下载单独用长超时客户端（段传输可持续数分钟）。
 func New(base string) *Client {
+	transport := &http.Transport{
+		MaxIdleConns:        1024,
+		MaxIdleConnsPerHost: 1024, // 段下载高并发复用连接（workers 可到 512，多任务并发更高）
+		IdleConnTimeout:     90 * time.Second,
+	}
 	return &Client{
 		Base: strings.TrimRight(base, "/"),
 		HTTP: &http.Client{
-			Timeout: 60 * time.Second,
-			Transport: &http.Transport{
-				MaxIdleConns:        1024,
-				MaxIdleConnsPerHost: 1024, // 段下载高并发复用连接（workers 可到 512，多任务并发更高）
-				IdleConnTimeout:     90 * time.Second,
-			},
+			Timeout:   15 * time.Second,
+			Transport: transport,
+		},
+		Fetch: &http.Client{
+			Timeout:   10 * time.Minute,
+			Transport: transport,
 		},
 		Limit: 50,
 	}
@@ -301,7 +310,7 @@ var (
 	previewRe = regexp.MustCompile(`(?i)_preview\.m3u8(\?|$)`)
 )
 
-// FetchBytes 下载任意站点资源（带重试）。
+// FetchBytes 下载任意站点资源（带重试；用 Fetch 客户端，长超时）。
 func (c *Client) FetchBytes(rawurl string) ([]byte, error) {
 	var last error
 	for attempt := 1; attempt <= 3; attempt++ {
@@ -310,7 +319,7 @@ func (c *Client) FetchBytes(rawurl string) ([]byte, error) {
 			return nil, err
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0")
-		resp, err := c.HTTP.Do(req)
+		resp, err := c.Fetch.Do(req)
 		if err == nil && resp.StatusCode == http.StatusOK {
 			defer resp.Body.Close()
 			return io.ReadAll(resp.Body)
